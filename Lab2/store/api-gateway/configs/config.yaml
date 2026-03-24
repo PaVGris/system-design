@@ -1,0 +1,79 @@
+components_manager:
+    task_processors:
+        main-task-processor:
+            worker_threads: 4
+        fs-task-processor:
+            worker_threads: 2
+    default_task_processor: main-task-processor
+    components:
+        server:
+            listener:
+                port: 8080
+                task_processor: main-task-processor
+        logging:
+            fs-task-processor: fs-task-processor
+            loggers:
+                default:
+                    file_path: '@stdout'
+                    level: info
+        dynamic-config:
+            defaults: {}
+        testsuite-support: {}
+        http-client:
+        http-client-core:
+            fs-task-processor: fs-task-processor
+        dns-client:
+            fs-task-processor: fs-task-processor
+        handler-gateway-users:
+            path: /users/{path}
+            method: GET,POST,PUT,DELETE
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+
+        handler-gateway-items:
+            path: /items/{path}
+            method: GET,POST,PUT,DELETE
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+
+        handler-gateway-items-root:
+            path: /items
+            method: GET,POST
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+
+        handler-gateway-cart:
+            path: /cart/{path}
+            method: GET,POST,PUT,DELETE
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+            
+        handler-gateway-cart-root:
+            path: /cart
+            method: GET,POST
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+            
+        handler-ping:
+            path: /ping
+            method: GET
+            task_processor: main-task-processor
+            throttling_enabled: false
+        tests-control:
+            load-enabled: $testsuite-enabled
+            path: /tests/{action}
+            method: POST
+            task_processor: main-task-processor
+            throttling_enabled: false
+
+config_vars: configs/config_vars.yaml

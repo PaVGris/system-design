@@ -1,0 +1,74 @@
+services:
+  user-service:
+    build: ./user-service
+    ports:
+      - "8081:8081"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8081/ping"]
+    #   interval: 5s
+    #   timeout: 3s
+    #   retries: 5
+
+  item-service:
+    build: ./item-service
+    ports:
+      - "8082:8082"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8082/ping"]
+    #   interval: 5s
+    #   timeout: 3s
+    #   retries: 5
+
+  cart-service:
+    build: ./cart-service
+    ports:
+      - "8083:8083"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      - user-service
+      # user-service:
+      #   condition: service_healthy
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8083/ping"]
+    #   interval: 5s
+    #   timeout: 3s
+    #   retries: 5
+
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8080:8080"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      - user-service
+      - item-service
+      - cart-service
+      # user-service:
+      #   condition: service_healthy
+      # item-service:
+      #   condition: service_healthy
+      # cart-service:
+      #   condition: service_healthy
+    environment:
+      - USER_SERVICE_URL=http://user-service:8081
+      - ITEM_SERVICE_URL=http://item-service:8082
+      - CART_SERVICE_URL=http://cart-service:8083
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+    #   interval: 5s
+    #   timeout: 3s
+    #   retries: 5

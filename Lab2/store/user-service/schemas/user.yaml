@@ -1,0 +1,38 @@
+components:
+  schemas:
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+      required:
+        - username
+        - password
+        - name
+        - role
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+      required:
+        - username
+        - password
+
+    AuthResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          type: string
