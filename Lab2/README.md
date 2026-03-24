@@ -17,10 +17,10 @@ REST API микросервисный магазин на C++ userver framework.
 |Index|Tags|Description|
 |-----|----|-----------|
 |[ADR-001](./decisions/ADR-001.md)|architecture, gateway, auth|API Gateway как единая точка входа|
-|[ADR-002](./decisions/ADR-002.md)|auth, security|Chaotic для генерации DTO|
-|[ADR-003](./decisions/ADR-003.md)| codegen, dto, chaotic|Session-based аутентификация|
+|[ADR-002](./decisions/ADR-002.md)|auth, security|Session-based аутентификация|
+|[ADR-003](./decisions/ADR-003.md)| codegen, dto, chaotic|Chaotic для генерации DTO|
 
-
+Chaotic для генерации DTO|
 ## Архитектура
 ![image](./content/container.png)
 
