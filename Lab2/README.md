@@ -20,7 +20,6 @@ REST API микросервисный магазин на C++ userver framework.
 |[ADR-002](./decisions/ADR-002.md)|auth, security|Session-based аутентификация|
 |[ADR-003](./decisions/ADR-003.md)| codegen, dto, chaotic|Chaotic для генерации DTO|
 
-Chaotic для генерации DTO|
 ## Архитектура
 ![image](./content/container.png)
 
