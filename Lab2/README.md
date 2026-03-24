@@ -41,6 +41,7 @@ REST API микросервисный магазин на C++ userver framework.
 - Docker Compose
 
 ### Запуск микросервисов
+#### Docker Compose
 ```bash
 git clone <ссылка на репозиторий>
 cd Lab2/store
@@ -51,6 +52,7 @@ docker-compose up --build
 
 ![image](./content/docker.png)
 
+#### Dev Container
 Каждый микросервис запустить вот такой командой внутри определенной папки (например, user-service):
 ```bash
 cd user-service
