@@ -1,0 +1,58 @@
+components_manager:
+    task_processors:
+        main-task-processor:
+            worker_threads: 4
+        fs-task-processor:
+            worker_threads: 2
+    default_task_processor: main-task-processor
+    components:
+        server:
+            listener:
+                port: 8081
+                task_processor: main-task-processor
+        logging:
+            fs-task-processor: fs-task-processor
+            loggers:
+                default:
+                    file_path: '@stdout'
+                    level: info
+        dynamic-config:
+            defaults: {}
+        http-client:
+        http-client-core:
+            fs-task-processor: fs-task-processor
+        dns-client:
+            fs-task-processor: fs-task-processor
+        testsuite-support: {}
+        users-storage: {}
+        postgres-db:
+            dbconnection: postgresql://user:pass@db:5432/store_db
+            blocking_task_processor: fs-task-processor # важно: работа с БД идет в отдельном потоке
+            dns_resolver: async
+        handler-register:
+            path: /users/register
+            method: POST
+            task_processor: main-task-processor
+        handler-login:
+            path: /users/login
+            method: POST
+            task_processor: main-task-processor
+        handler-get-user:
+            path: /users/{id}
+            method: GET
+            task_processor: main-task-processor
+        handler-validate-token:
+            path: /users/validate
+            method: GET
+            task_processor: main-task-processor
+        handler-ping:
+            path: /ping
+            method: GET
+            task_processor: main-task-processor
+            throttling_enabled: false
+        tests-control:
+            load-enabled: $testsuite-enabled
+            path: /tests/{action}
+            method: POST
+            task_processor: main-task-processor
+            throttling_enabled: false

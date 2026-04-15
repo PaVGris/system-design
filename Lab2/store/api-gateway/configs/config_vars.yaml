@@ -1,4 +1,0 @@
-user-service-url: http://user-service:8081
-item-service-url: http://item-service:8082
-cart-service-url: http://cart-service:8083
-testsuite-enabled: false

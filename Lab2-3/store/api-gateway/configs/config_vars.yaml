@@ -1,0 +1,4 @@
+user-service-url: http://localhost:8081
+item-service-url: http://localhost:8082
+cart-service-url: http://localhost:8083
+testsuite-enabled: false

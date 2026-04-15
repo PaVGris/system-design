@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: store_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../postgresql/schemas:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  user-service:
+    build: ./user-service
+    ports:
+      - "8081:8081"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - dbconnection_string=postgresql://user:pass@postgres:5432/store_db
+
+  item-service:
+    build: ./item-service
+    ports:
+      - "8082:8082"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - dbconnection_string=postgresql://user:pass@postgres:5432/store_db
+
+  cart-service:
+    build: ./cart-service
+    ports:
+      - "8083:8083"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      postgres:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+    environment:
+      - dbconnection_string=postgresql://user:pass@postgres:5432/store_db
+
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8080:8080"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      - user-service
+      - item-service
+      - cart-service
+    environment:
+      - USER_SERVICE_URL=http://user-service:8081
+      - ITEM_SERVICE_URL=http://item-service:8082
+      - CART_SERVICE_URL=http://cart-service:8083
+
+volumes:
+  postgres_data:
