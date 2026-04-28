@@ -1,0 +1,3866 @@
+
+================================================================================
+ФАЙЛ: .\fill_db.py
+================================================================================
+
+import os
+import psycopg2
+from faker import Faker
+import time
+import uuid
+
+# Настройки подключения
+DB_SETTINGS = {
+    "host": os.getenv("DB_HOST", "localhost"),
+    "database": os.getenv("DB_NAME", "store_db"),
+    "user": os.getenv("DB_USER", "user"),
+    "password": os.getenv("DB_PASS", "pass")
+}
+
+def fill_users():
+    fake = Faker()
+    conn = psycopg2.connect(**DB_SETTINGS)
+    cur = conn.cursor()
+
+    # Найти максимальный id в таблице users
+    cur.execute("SELECT COALESCE(MAX(id), 0) FROM users")
+    max_id = cur.fetchone()[0]
+    print(f"Текущий максимальный id: {max_id}")
+
+    # Сколько нужно добавить до 1 000 000
+    target_total = 1_000_000
+    current_count = max_id
+    need_to_add = target_total - current_count
+
+    if need_to_add <= 0:
+        print(f"В таблице уже {current_count} записей, больше или равно {target_total}. Нечего добавлять.")
+        cur.close()
+        conn.close()
+        return
+
+    print(f"Нужно добавить: {need_to_add} пользователей...")
+    start_time = time.time()
+
+    batch_size = 10000
+    batches = (need_to_add + batch_size - 1) // batch_size
+
+    for batch_num in range(batches):
+        users = []
+        current_batch_size = min(batch_size, need_to_add - batch_num * batch_size)
+        
+        for _ in range(current_batch_size):
+            # Гарантированно уникальный username через UUID
+            username = f"user_{uuid.uuid4().hex[:12]}"
+            name = fake.name()
+            if batch_num == 0 and _ < 10:
+                name = f"Ivan {fake.last_name()}"
+            
+            users.append((username, 'password123', name, 'client'))
+        
+        cur.executemany(
+            "INSERT INTO users (username, password, name, role) VALUES (%s, %s, %s, %s)",
+            users
+        )
+        conn.commit()
+        
+        added = (batch_num + 1) * batch_size
+        if added > need_to_add:
+            added = need_to_add
+        print(f"Загружено {added} / {need_to_add} строк...")
+
+    end_time = time.time()
+    print(f"Готово! Затрачено времени: {round(end_time - start_time, 2)} сек.")
+    
+    # Проверить итоговое количество
+    cur.execute("SELECT COUNT(*) FROM users")
+    final_count = cur.fetchone()[0]
+    print(f"Всего пользователей в БД: {final_count}")
+    
+    cur.close()
+    conn.close()
+
+if __name__ == "__main__":
+    fill_users()
+
+
+================================================================================
+ФАЙЛ: .\README.md
+================================================================================
+
+# Store 
+
+REST API микросервисный магазин на C++ userver framework.
+
+> [!NOTE]  
+> В дальнейшем уберу папку Lab2 и сделаю репозиторий, как проект, но пока что так.
+## Стек
+
+- **Framework**: [userver](https://userver.tech/)
+- **Язык**: C++20
+- **Сборка**: CMake
+- **Кодогенерация**: Chaotic (генерация DTO)
+- **Тестирование**: pytest + userver testsuite
+- **Контейнеризация**: Docker + Docker Compose
+
+## ADR
+|Index|Tags|Description|
+|-----|----|-----------|
+|[ADR-001](./decisions/ADR-001.md)|architecture, gateway, auth|API Gateway как единая точка входа|
+|[ADR-002](./decisions/ADR-002.md)|auth, security|Session-based аутентификация|
+|[ADR-003](./decisions/ADR-003.md)| codegen, dto, chaotic|Chaotic для генерации DTO|
+
+## Архитектура
+![image](./content/container.png)
+
+### Сервисы
+
+| Сервис | Порт | Описание |
+|--------|------|----------|
+| api-gateway | 8080 | Маршрутизация запросов, аутентификация |
+| user-service | 8081 | Регистрация, логин, управление пользователями |
+| item-service | 8082 | Каталог товаров |
+| cart-service | 8083 | Корзина пользователя |
+
+## Схема базы данных
+
+Схема находится в `postgresql/schemas/01_schema.sql`, тестовые данные — в `02_data.sql`.
+
+### Таблицы
+
+| Таблица | Описание |
+|---------|----------|
+| users | Пользователи системы (покупатели и продавцы) |
+| items | Каталог товаров |
+| tokens | Сессионные токены авторизации |
+| cart_items | Позиции в корзинах пользователей |
+
+### Связи
+
+- tokens.user_id → users.id - токен принадлежит пользователю
+- cart_items.user_id → users.id - корзина принадлежит пользователю  
+- cart_items.item_id → items.id - позиция корзины ссылается на товар
+
+### Индексы
+
+| Индекс | Таблица | Назначение |
+|--------|---------|------------|
+| idx_users_name | users(name text_pattern_ops) | Поиск по маске имени (`LIKE 'Ivan%'`) |
+| idx_tokens_user_id | tokens(user_id) | Поиск токенов пользователя при валидации |
+
+Не делал индексы с другими таблицами, так как думаю, что возможно из-за следующих лабораторных работ, они могут стать ненужными.
+## Быстрый старт
+
+### Требования
+
+- Docker Desktop
+- Docker Compose
+
+### Запуск микросервисов
+#### Docker Compose
+```bash
+git clone <ссылка на репозиторий>
+cd Lab2/store
+docker-compose up --build
+```
+> [!IMPORTANT]  
+> Такой запуск потребует много оперативной памяти, поэтому лучше использовать `Dev Container`.
+
+![image](./content/docker.png)
+
+#### Dev Container
+Каждый микросервис запустить вот такой командой внутри определенной папки (например, user-service):
+```bash
+cd store/user-service
+mkdir -p build && cd build
+cmake ..
+cd .. && ./build/user-service --config ./configs/config.yaml 
+```
+### Проверка доступности сервера
+```bash
+curl http://localhost:8080/ping
+```
+
+## API
+
+Полная документация: [`openapi.yaml`](./openapi.yaml)
+
+Swagger UI не использовался, но использовался Postman.
+
+### Аутентификация
+```bash
+# Регистрация
+curl -X POST http://localhost:8080/users/register \
+  -H "Content-Type: application/json" \
+  -d '{"username": "pavel", "password": "123", "name": "Pavel", "role": "client"}'
+
+# Логинимся и получаем токен
+curl -X POST http://localhost:8080/users/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "pavel", "password": "123"}'
+```
+
+### Товары
+```bash
+# Получить список (нужен токен)
+curl http://localhost:8080/items \
+  -H "Authorization: Bearer <token>"
+
+# Создать товар (только для seller)
+curl -X POST http://localhost:8080/items \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Laptop", "price": 999.99, "quantity": 10}'
+```
+
+### Корзина
+```bash
+# Добавить товар
+curl -X POST http://localhost:8080/cart \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"item_id": 1, "quantity": 2}'
+
+# Посмотреть корзину
+curl http://localhost:8080/cart \
+  -H "Authorization: Bearer <token>"
+```
+
+## Роли
+
+| Роль | Права |
+|------|-------|
+| client | Просмотр товаров, управление корзиной |
+| seller | Всё выше + создание/изменение/удаление товаров |
+
+## Структура проекта
+```
+content/                  # Картиночки
+decisions/                # ADR
+store/                    # Сам сервис
+├── api-gateway/          # Маршрутизация и аутентификация
+│   ├── configs/          # Конфигурация
+│   ├── src/handlers/     # HTTP хендлеры
+│   └── tests/            # Функциональные тесты
+├── cart-service/         # Корзина
+│   ├── configs/          # Конфигурация
+│   ├── src/    
+│   │   ├── handlers/     # HTTP хендлеры
+│   │   └── storage/      # in-memory хранилище
+│   ├── schemas/          # Схемы
+│   └── tests/            # Функциональные тесты
+├── item-service/         # Каталог товаров
+│   ├── configs/          # Конфигурация
+│   ├── src/    
+│   │   ├── handlers/     # HTTP хендлеры
+│   │   └── storage/      # in-memory хранилище
+│   ├── schemas/          # Схемы
+│   └── tests/            # Функциональные тесты
+├── user-service/         # Пользователи и токены
+│   ├── configs/          # Конфигурация
+│   ├── src/    
+│   │   ├── handlers/     # HTTP хендлеры
+│   │   └── storage/      # in-memory хранилище
+│   ├── schemas/          # Схемы
+│   └── tests/            # Функциональные тесты
+├── docker-compose.yaml
+├── openapi.yaml          # API документация
+```
+
+## Тестирование
+
+Каждый сервис имеет функциональные тесты на pytest через userver testsuite. Один из примеров тестирования:
+```bash
+cd user-service/build
+ctest -V
+```
+
+
+================================================================================
+ФАЙЛ: .\.devcontainer\devcontainer.json
+================================================================================
+
+{
+  "name": "Userver Dev",
+  "dockerComposeFile": "docker-compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/home/user/myservice",
+  
+  "containerEnv": {
+    "CCACHE_DIR": "/home/user/myservice/.ccache",
+    "CORES_DIR": "/cores",
+    "PREFIX": "${PREFIX:-~/.local}",
+    "SHELL": "/bin/bash"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-vscode.cmake-tools",
+        "ms-vscode.makefile-tools",
+        "vadimcn.vscode-lldb",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "clangd.arguments": [
+          "--background-index",
+          "--compile-commands-dir=.vscode",
+          "--clang-tidy",
+          "--completion-style=detailed",
+          "--header-insertion=never"
+        ],
+        "clangd.path": "/usr/bin/clangd",
+        "cmake.automaticReconfigure": false,
+        "cmake.configureOnEdit": false,
+        "cmake.configureOnOpen": false,
+        "cmake.copyCompileCommands": "${workspaceFolder}/.vscode/compile_commands.json"
+      }
+    }
+  },
+
+  "forwardPorts": [8080, 8081, 8082, 8083, 5432],
+  
+  "onCreateCommand": "sudo git config --global --add safe.directory /home/user/myservice",
+  "postCreateCommand": "pip install faker psycopg2-binary",
+  "remoteUser": "user"
+}
+
+
+================================================================================
+ФАЙЛ: .\.devcontainer\docker-compose.yaml
+================================================================================
+
+services:
+  app:
+    image: ghcr.io/userver-framework/ubuntu-22.04-userver-pg-dev:v2.14
+    volumes:
+      - ..:/home/user/myservice:cached
+    # УБРАТЬ network_mode: service:db
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    command: sleep infinity
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_NAME=store_db
+      - DB_USER=user
+      - DB_PASS=pass
+    networks:
+      - store-network
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=pass
+      - POSTGRES_DB=store_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ../postgresql/schemas:/docker-entrypoint-initdb.d:ro
+    networks:
+      - store-network
+  mongo-db:
+    image: mongo:5.0
+    container_name: mongo-store
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=store_db
+      
+volumes:
+  db-data:
+
+networks:
+  store-network:
+    driver: bridge
+
+
+================================================================================
+ФАЙЛ: .\.devcontainer\README.md
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\.github\dependabot.yml
+================================================================================
+
+# To get started with Dependabot version updates, you'll need to specify which
+# package ecosystems to update and where the package manifests are located.
+# Please see the documentation for all configuration options:
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions" # See documentation for possible values
+    directory: "/" # Location of package manifests
+    schedule:
+        interval: "weekly"
+
+
+================================================================================
+ФАЙЛ: .\.github\workflows\ci.yml
+================================================================================
+
+# NOTE: if this CI check breaks, just remove it, docker checks are enough anyway.
+
+name: CI
+
+'on':
+    schedule:
+      - cron: '30 5 * * 1'  # Every Monday at 5:30
+    pull_request:
+    push:
+        branches:
+          - develop
+
+env:
+    UBSAN_OPTIONS: print_stacktrace=1
+
+jobs:
+    posix:
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                  - os: ubuntu-24.04
+                    make: test-debug
+                    info: g++-11 + test-debug
+
+                  - os: ubuntu-24.04
+                    make: test-release
+                    info: g++-11 + test-release
+
+        name: '${{matrix.os}}: ${{matrix.info}}'
+        runs-on: ${{matrix.os}}
+
+        steps:
+          - uses: actions/checkout@v4
+            with:
+                submodules: true
+
+          - name: Reuse ccache directory
+            uses: actions/cache@v4
+            with:
+                path: ~/.cache/ccache
+                key: '${{matrix.os}} ${{matrix.info}} ccache-dir ${{github.ref}} run-${{github.run_number}}'
+                restore-keys: |
+                    ${{matrix.os}} ${{matrix.info}} ccache-dir ${{github.ref}} run-'
+                    ${{matrix.os}} ${{matrix.info}} ccache-
+
+          - name: Install packages
+            run: |
+                DEPS_FILE="https://raw.githubusercontent.com/userver-framework/userver/refs/heads/develop/scripts/docs/en/deps/${{matrix.os}}.md"
+                sudo apt update
+                sudo apt install --allow-downgrades -y $(wget -q -O - ${DEPS_FILE})
+                python3 -m pip install -r requirements.txt
+
+          - name: Setup ccache
+            run: |
+                ccache -M 2.0GB
+                ccache -s
+
+          - name: Run ${{matrix.make}}
+            run: |
+                make ${{matrix.make}}
+
+
+================================================================================
+ФАЙЛ: .\.github\workflows\docker.yaml
+================================================================================
+
+name: Docker build
+
+'on':
+    schedule:
+      - cron: '30 5 * * 1'  # Every Monday at 5:30
+    pull_request:
+    push:
+        branches:
+          - master
+          - develop
+          - feature/**
+
+env:
+    UBSAN_OPTIONS: print_stacktrace=1
+
+jobs:
+    tests:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+            with:
+                submodules: true
+
+          - name: Reuse ccache directory
+            uses: actions/cache@v4
+            with:
+                path: .ccache
+                key: 'ccache-dir-${{github.ref}}_run-${{github.run_number}}'
+                restore-keys: |
+                    ccache-dir-${{github.ref}}_run-
+                    ccache-
+
+          - name: Cmake
+            run: make docker-cmake-debug
+
+          - name: Build
+            run: make docker-build-debug
+
+          - name: Test
+            run: make docker-test-debug
+
+
+================================================================================
+ФАЙЛ: .\decisions\ADR-001.md
+================================================================================
+
+# API Gateway как единая точка входа
+
+| Metadata | Value |
+|----------|-------|
+| Date | 2026-03-20 |
+| Author | @PaVGris |
+| Status | Approved |
+| Tags | architecture, gateway, auth |
+
+## Контекст и мотивация
+
+Система состоит из трёх сервисов: user-service, item-service, cart-service. Нужно решить как клиент будет с ними взаимодействовать и где проверять аутентификацию.
+
+## Решение
+
+Добавить api-gateway на порту 8080, как единственную точку входа для клиента.
+
+Gateway выполняет две функции:
+
+**1. Маршрутизация:**
+```
+/users/* в user-service:8081
+/items/* в item-service:8082
+/cart/*  в cart-service:8083
+```
+
+**2. Проверка токена перед каждым запросом:**
+```
+клиент -> gateway -> GET /users/validate (токен валиден?) ---(да)--> целевой сервис
+```
+
+Публичные endpoints (`/users/register`, `/users/login`) не требуют токена.
+
+## Причины
+
+Без gateway каждый сервис должен сам проверять токен, а это дублирование логики в трёх местах.
+
+С gateway проверка токена централизована. Сервисы доверяют заголовку `X-User-Id` который передаёт gateway — они не знают ничего о токенах
+
+## Ограничения
+
+- Если умрет Gateway, то не будет работать абсолютно всё
+- Добавляет один лишний HTTP запрос к user-service при каждом запросе (валидация токена)
+
+## Что изменится при переходе на JWT
+
+Gateway сможет проверять токен локально без запроса к user-service, так как убирает лишние действие.
+
+
+================================================================================
+ФАЙЛ: .\decisions\ADR-002.md
+================================================================================
+
+# Session-based аутентификация
+
+| Metadata | Value |
+|----------|-------|
+| Date | 2026-03-18 |
+| Author | @PaVGris |
+| Status | Approved |
+| Tags | auth, security |
+
+## Контекст и мотивация
+
+Нужно реализовать аутентификацию для REST API. Задание допускает JWT или session-based аутентификацию.
+
+## Решение
+
+Использовать простой случайный токен (64 hex символа) вместо JWT.
+
+При логине генерируется токен:
+```cpp
+std::random_device rd;
+std::mt19937 gen(rd());
+// генерируем 32 случайных байта в 64 hex символа
+```
+
+Токен хранится в памяти: `std::unordered_map<token, user_id>`.
+
+При каждом запросе gateway проверяет токен через `GET /users/validate`.
+
+## Причины выбора простого токена вместо JWT
+
+JWT требует:
+- стороннюю библиотеку (`libjwt` или `jwt-cpp`)
+- настройку секретного ключа
+- логику проверки подписи
+
+Простой токен достаточен для лабы с in-memory хранилищем — он выполняет ту же функцию: идентифицирует пользователя.
+
+## Ограничения
+
+- Токены теряются при перезапуске сервиса
+- Требует обращения к user-service при каждом запросе для валидации
+- Нет срока действия токена
+
+## Что изменится в продакшене
+
+Заменить на JWT — тогда gateway сможет проверять токен локально без обращения к user-service, что снизит latency.
+
+
+================================================================================
+ФАЙЛ: .\decisions\ADR-003.md
+================================================================================
+
+# Chaotic для генерации DTO
+
+| Metadata | Value |
+|----------|-------|
+| Date | 2026-03-15 |
+| Author | @PaVGris |
+| Status | Approved |
+| Tags | codegen, dto, chaotic |
+
+## Контекст и мотивация
+
+Каждый HTTP endpoint принимает и возвращает JSON. Нужно парсить входящие данные и сериализовать исходящие.
+
+## Решение
+
+Использовать Chaotic — встроенный кодогенератор userver. Описываем структуры в YAML:
+```yaml
+RegisterRequest:
+  type: object
+  properties:
+    username:
+      type: string
+    password:
+      type: string
+  required: [username, password]
+```
+
+Chaotic генерирует C++ структуры автоматически. В коде используем:
+```cpp
+auto req = body.As<RegisterRequest>();
+```
+
+## Причины
+
+Без Chaotic каждое поле парсится вручную:
+```cpp
+auto username = body["username"].As<std::string>();
+auto password = body["password"].As<std::string>();
+```
+
+С Chaotic:
+- Автоматическая валидация обязательных полей
+- Схема служит документацией
+- Типобезопасность на уровне компиляции
+
+## Ограничения
+
+- Добавляет шаг кодогенерации в сборку
+- Сгенерированные optional поля требуют `.value_or()` при использовании
+
+
+================================================================================
+ФАЙЛ: .\Lab3\optimization.md
+================================================================================
+
+# Оптимизации запросов
+
+В ходе выполнения работы была проведена оптимизация производительности базы данных `store_db` при объеме данных в 1 000 000 записей (гененрировались пользователи с помощью файла [`fill_db.py`](../fill_db.py)).
+
+## 1. Поиск пользователей по маске имени (`LIKE 'Ivan%'`)
+
+Данный запрос используется для поиска пользователей по частичному совпадению имени.
+
+### 1.1. До создания индекса (Последовательное сканирование)
+Без индекса PostgreSQL выполняет параллельное сканирование всей таблицы (`Parallel Seq Scan`).
+
+```console
+user@99609f32476e:~/myservice$ psql -h db -U user -d store_db
+Password for user user: 
+psql (14.20 (Ubuntu 14.20-0ubuntu0.22.04.1), server 15.17)
+WARNING: psql major version 14, server major version 15.
+         Some psql features might not work.
+Type "help" for help.
+
+store_db=# DROP INDEX IF EXISTS idx_users_name;
+DROP INDEX
+store_db=# SELECT count(*) AS total_users FROM users;
+ total_users 
+-------------
+      999980
+(1 row)
+
+```
+**Запрос:**
+```sql
+EXPLAIN ANALYZE
+SELECT id, username, name, role
+FROM users
+WHERE name LIKE 'Ivan%';
+```
+**План:**
+```
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..16809.03 rows=98 width=42) (actual time=0.317..43.234 rows=178 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   ->  Parallel Seq Scan on users  (cost=0.00..15799.23 rows=41 width=42) (actual time=5.486..37.446 rows=59 loops=3)
+         Filter: (name ~~ 'Ivan%'::text)
+         Rows Removed by Filter: 333267
+ Planning Time: 0.366 ms
+ Execution Time: 43.280 ms
+(8 rows)
+```
+## 1.2. Создание индекса
+Для оптимизации поиска по текстовой маске использован индекс с классом операторов text_pattern_ops, который позволяет эффективно использовать B-tree для оператора LIKE. Пробовал без этого оператора, и индекс был неэффективен, использовался обычный последовательный скан.
+```sql
+CREATE INDEX idx_users_name ON users(name text_pattern_ops);
+```
+## 1.3. После создания индекса
+Планировщик переключился на использование индекса (Index Scan).
+
+**План:**
+```
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Index Scan using idx_users_name on users  (cost=0.42..8.45 rows=98 width=42) (actual time=0.427..0.798 rows=178 loops=1)
+   Index Cond: ((name ~>=~ 'Ivan'::text) AND (name ~<~ 'Ivao'::text))
+   Filter: (name ~~ 'Ivan%'::text)
+ Planning Time: 0.711 ms
+ Execution Time: 0.831 ms
+
+```
+**Результат:** Время выполнения сократилось с 43.280 мс до 0.831 мс (примерно в 52 раза).
+
+
+# 2. Поиск токена по user_id
+Этот запрос важен для производительности, так как выполняется при каждой авторизации.
+
+## 2.1. До создания индекса
+Генерируем примерчики для индекса.
+```console
+store_db=# INSERT INTO tokens (token, user_id)
+SELECT md5(id::text), id 
+FROM users 
+LIMIT 1000000;
+INSERT 0 999980
+
+```
+Без индекса БД вынуждена перебирать все записи в таблице tokens.
+**Запрос:**
+
+```sql
+EXPLAIN ANALYZE 
+SELECT * FROM tokens WHERE user_id = 500000;
+```
+**План:**
+
+```
+                                               QUERY PLAN                                               
+--------------------------------------------------------------------------------------------------------
+ Seq Scan on tokens  (cost=0.00..18692.06 rows=1 width=44) (actual time=75.090..104.137 rows=1 loops=1)
+   Filter: (user_id = 500000)
+   Rows Removed by Filter: 999984
+ Planning Time: 1.153 ms
+ Execution Time: 104.151 ms
+```
+## 2.2. Создание индекса
+Создаем индекс на внешний ключ user_id.
+
+```sql
+CREATE INDEX idx_tokens_user_id ON tokens(user_id);
+```
+## 2.3. После создания индекса (Bitmap Index Scan)
+Поиск теперь выполняется мгновенно через индекс.
+
+**План:**
+
+```
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on tokens  (cost=95.17..11373.33 rows=5000 width=44) (actual time=0.057..0.057 rows=1 loops=1)
+   Recheck Cond: (user_id = 500000)
+   Heap Blocks: exact=1
+   ->  Bitmap Index Scan on idx_tokens_user_id  (cost=0.00..93.92 rows=5000 width=0) (actual time=0.040..0.040 rows=1 loops=1)
+         Index Cond: (user_id = 500000)
+ Planning Time: 0.255 ms
+ Execution Time: 0.140 ms
+```
+**Результат:** Время выполнения сократилось со 104.151 мс до 0.140 мс (~ в 740 раз).
+
+# Выводы
+-- Индексы на внешние ключи обязательны для предотвращения деградации производительности при росте данных.
+
+-- Специальные классы операторов (как text_pattern_ops) необходимы для оптимизации специфических поисковых запросов (LIKE).
+
+
+================================================================================
+ФАЙЛ: .\postgresql\schemas\01_schema.sql
+================================================================================
+
+-- Таблица пользователей
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('client', 'seller')) 
+);
+
+-- Таблица товаров
+CREATE TABLE IF NOT EXISTS items (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    price INT NOT NULL CHECK (price >= 0), 
+    quantity INT NOT NULL DEFAULT 0 CHECK (quantity >= 0) 
+);
+
+-- Таблица токенов
+CREATE TABLE IF NOT EXISTS tokens (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Таблица корзины
+CREATE TABLE IF NOT EXISTS cart_items (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    PRIMARY KEY (user_id, item_id)
+);
+
+-- Индексы для WHERE и JOIN (пункт 3 задания)
+CREATE INDEX IF NOT EXISTS idx_users_name ON users(name text_pattern_ops);
+CREATE INDEX IF NOT EXISTS idx_tokens_user_id ON tokens(user_id);
+
+
+================================================================================
+ФАЙЛ: .\postgresql\schemas\02_data.sql
+================================================================================
+
+INSERT INTO users (username, password, name, role) VALUES 
+    ('admin', '123', 'Admin Adminov', 'seller'),
+    ('user1', '123', 'Ivan Ivanov', 'client'),
+    ('user2', '123', 'Ivan Petrov', 'client'),
+    ('seller1', '123', 'Maria Sidorova', 'seller'),
+    ('user3', '123', 'Anna Ivanova', 'client'),
+    ('user4', '123', 'Sergey Volkov', 'client'),
+    ('seller2', '123', 'Dmitry Kuznecov', 'seller'),
+    ('user5', '123', 'Elena Popova', 'client'),
+    ('user6', '123', 'Alexey Smirnov', 'client'),
+    ('user7', '123', 'Olga Semenova', 'client')
+ON CONFLICT (username) DO NOTHING;
+
+INSERT INTO items (name, description, price, quantity) VALUES 
+    ('Laptop', 'Powerful gaming laptop', 10000000, 5),
+    ('Mouse', 'Wireless optical mouse', 150000, 50),
+    ('Keyboard', 'Mechanical keyboard RGB', 500000, 30),
+    ('Monitor', '27" 4K UHD Monitor', 3500000, 10),
+    ('Headphones', 'Noise cancelling headphones', 800000, 25),
+    ('Webcam', '1080p HD Webcam', 400000, 15),
+    ('SSD 1TB', 'NVMe M.2 SSD', 1200000, 40),
+    ('RAM 16GB', 'DDR4 3200MHz', 600000, 60),
+    ('Power Bank', '20000mAh fast charging', 250000, 35),
+    ('USB Cable', 'Type-C 2m braided', 50000, 100)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO cart_items (user_id, item_id, quantity) VALUES 
+    ((SELECT id FROM users WHERE username = 'user1'), (SELECT id FROM items WHERE name = 'Laptop'), 1),
+    ((SELECT id FROM users WHERE username = 'user1'), (SELECT id FROM items WHERE name = 'Mouse'), 2),
+    ((SELECT id FROM users WHERE username = 'user2'), (SELECT id FROM items WHERE name = 'Keyboard'), 1),
+    ((SELECT id FROM users WHERE username = 'user3'), (SELECT id FROM items WHERE name = 'Monitor'), 1),
+    ((SELECT id FROM users WHERE username = 'user4'), (SELECT id FROM items WHERE name = 'Headphones'), 1),
+    ((SELECT id FROM users WHERE username = 'user5'), (SELECT id FROM items WHERE name = 'Webcam'), 1),
+    ((SELECT id FROM users WHERE username = 'user6'), (SELECT id FROM items WHERE name = 'SSD 1TB'), 2),
+    ((SELECT id FROM users WHERE username = 'user7'), (SELECT id FROM items WHERE name = 'RAM 16GB'), 4),
+    ((SELECT id FROM users WHERE username = 'user1'), (SELECT id FROM items WHERE name = 'USB Cable'), 3),
+    ((SELECT id FROM users WHERE username = 'user2'), (SELECT id FROM items WHERE name = 'Power Bank'), 1)
+ON CONFLICT DO NOTHING;
+
+
+================================================================================
+ФАЙЛ: .\postgresql\schemas\03_queries.sql
+================================================================================
+
+-- 1. Создание нового пользователя 
+INSERT INTO users (username, password, name, role) 
+VALUES ('new_user', 'hashed_password', 'Aleksey Ivanov', 'client'); 
+
+-- 2. Поиск пользователя по логину (точный поиск) 
+SELECT id, username, name, role 
+FROM users 
+WHERE username = 'user1'; 
+
+-- 3. Поиск пользователя по маске имени и фамилии 
+-- Позволяет найти всех Иванов, Алексеев и т.д.
+SELECT id, username, name, role 
+FROM users 
+WHERE name LIKE 'Ivan%';
+
+-- 4. Создание товара (для роли seller)
+INSERT INTO items (name, description, price, quantity) 
+VALUES ('Smartphone', 'Latest model with OLED display', 5000000, 20); 
+
+-- 5. Получение списка всех товаров 
+SELECT id, name, description, price, quantity FROM items;
+
+-- 6. Добавление товара в корзину для пользователя 
+-- Если товар уже есть, обновляем количество (UPSERT)
+INSERT INTO cart_items (user_id, item_id, quantity)
+VALUES (2, 1, 1)
+ON CONFLICT (user_id, item_id)
+DO UPDATE SET quantity = cart_items.quantity + EXCLUDED.quantity;
+
+-- 7. Получение корзины пользователя
+SELECT i.name, i.price, c.quantity, (i.price * c.quantity) AS total_item_price
+FROM cart_items c
+JOIN items i ON c.item_id = i.id
+WHERE c.user_id = 2; 
+
+-- 8. Удаление товара из корзины 
+DELETE FROM cart_items
+WHERE user_id = 2 AND item_id = 1;
+
+-- 9. Очистка корзины пользователя после заказа
+DELETE FROM cart_items
+WHERE user_id = 2;
+
+
+================================================================================
+ФАЙЛ: .\store\docker-compose.yaml
+================================================================================
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: store_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../postgresql/schemas:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  user-service:
+    build: ./user-service
+    ports:
+      - "8081:8081"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - dbconnection_string=postgresql://user:pass@postgres:5432/store_db
+
+  item-service:
+    build: ./item-service
+    ports:
+      - "8082:8082"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/store_db
+
+  cart-service:
+    build: ./cart-service
+    ports:
+      - "8083:8083"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/store_db
+
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8080:8080"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    depends_on:
+      - user-service
+      - item-service
+      - cart-service
+    environment:
+      - USER_SERVICE_URL=http://user-service:8081
+      - ITEM_SERVICE_URL=http://item-service:8082
+      - CART_SERVICE_URL=http://cart-service:8083
+
+volumes:
+  postgres_data:
+  mongo_data:
+
+
+================================================================================
+ФАЙЛ: .\store\openapi.yaml
+================================================================================
+
+openapi: "3.0.0"
+info:
+  title: Store API
+  version: "1.0.0"
+  description: REST API
+
+servers:
+  - url: http://localhost:8080
+    description: API Gateway
+
+paths:
+  /users/register:
+    post:
+      summary: Регистрация пользователя
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, name, role]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                name:
+                  type: string
+                role:
+                  type: string
+                  enum: [client, seller]
+            example:
+              username: pavel
+              password: "123"
+              name: Pavel
+              role: client
+      responses:
+        "201":
+          description: Пользователь создан
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  username:
+                    type: string
+        "400":
+          description: Username уже занят
+
+  /users/login:
+    post:
+      summary: Логин
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+            example:
+              username: pavel
+              password: "123"
+      responses:
+        "200":
+          description: Успешный логин
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+        "401":
+          description: Неверный логин или пароль
+
+  /users/{id}:
+    get:
+      summary: Получить пользователя по ID
+      tags: [Users]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Пользователь найден
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  username:
+                    type: string
+                  name:
+                    type: string
+                  role:
+                    type: string
+        "401":
+          description: Не авторизован
+        "404":
+          description: Пользователь не найден
+
+  /items:
+    get:
+      summary: Получить список товаров
+      tags: [Items]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Список товаров
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Item'
+    post:
+      summary: Создать товар (только seller)
+      tags: [Items]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateItemRequest'
+      responses:
+        "201":
+          description: Товар создан
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+        "401":
+          description: Не авторизован
+        "403":
+          description: Недостаточно прав (нужна роль seller)
+
+  /items/{id}:
+    get:
+      summary: Получить товар по ID
+      tags: [Items]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Товар найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        "404":
+          description: Товар не найден
+    put:
+      summary: Обновить товар (только seller)
+      tags: [Items]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateItemRequest'
+      responses:
+        "200":
+          description: Товар обновлён
+        "401":
+          description: Не авторизован
+        "403":
+          description: Недостаточно прав
+        "404":
+          description: Товар не найден
+    delete:
+      summary: Удалить товар (только seller)
+      tags: [Items]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Товар удалён
+        "401":
+          description: Не авторизован
+        "403":
+          description: Недостаточно прав
+        "404":
+          description: Товар не найден
+
+  /cart:
+    get:
+      summary: Получить корзину пользователя
+      tags: [Cart]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Корзина пользователя
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CartItem'
+        "401":
+          description: Не авторизован
+    post:
+      summary: Добавить товар в корзину
+      tags: [Cart]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item_id, quantity]
+              properties:
+                item_id:
+                  type: integer
+                quantity:
+                  type: integer
+      responses:
+        "200":
+          description: Товар добавлен
+        "401":
+          description: Не авторизован
+
+  /cart/{item_id}:
+    delete:
+      summary: Удалить товар из корзины
+      tags: [Cart]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Товар удалён из корзины
+        "401":
+          description: Не авторизован
+        "404":
+          description: Товар не найден в корзине
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    Item:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        quantity:
+          type: integer
+
+    CreateItemRequest:
+      type: object
+      required: [name, price, quantity]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        quantity:
+          type: integer
+
+    UpdateItemRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        quantity:
+          type: integer
+
+    CartItem:
+      type: object
+      properties:
+        item_id:
+          type: integer
+        quantity:
+          type: integer
+
+
+================================================================================
+ФАЙЛ: .\store\api-gateway\CMakeLists.txt
+================================================================================
+
+cmake_minimum_required(VERSION 3.22)
+project(api-gateway)
+
+find_package(userver REQUIRED COMPONENTS core)
+
+add_executable(api-gateway
+    src/main.cpp
+    src/handlers/gateway.cpp
+)
+
+target_link_libraries(api-gateway userver::core)
+
+target_include_directories(api-gateway PRIVATE src)
+
+userver_testsuite_add(
+    SERVICE_TARGET api-gateway
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    PYTEST_ARGS
+        --service-config=${CMAKE_CURRENT_SOURCE_DIR}/configs/config.yaml
+        --service-binary=${CMAKE_CURRENT_BINARY_DIR}/api-gateway
+)
+
+
+================================================================================
+ФАЙЛ: .\store\api-gateway\Dockerfile
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\api-gateway\configs\config.yaml
+================================================================================
+
+components_manager:
+    task_processors:
+        main-task-processor:
+            worker_threads: 4
+        fs-task-processor:
+            worker_threads: 2
+    default_task_processor: main-task-processor
+    components:
+        server:
+            listener:
+                port: 8080
+                task_processor: main-task-processor
+        logging:
+            fs-task-processor: fs-task-processor
+            loggers:
+                default:
+                    file_path: '@stdout'
+                    level: info
+        dynamic-config:
+            defaults: {}
+        testsuite-support: {}
+        http-client:
+        http-client-core:
+            fs-task-processor: fs-task-processor
+        dns-client:
+            fs-task-processor: fs-task-processor
+        handler-gateway-users:
+            path: /users/{path}
+            method: GET,POST,PUT,DELETE
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+
+        handler-gateway-items:
+            path: /items/{path}
+            method: GET,POST,PUT,DELETE
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+
+        handler-gateway-items-root:
+            path: /items
+            method: GET,POST
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+
+        handler-gateway-cart:
+            path: /cart/{path}
+            method: GET,POST,PUT,DELETE
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+            
+        handler-gateway-cart-root:
+            path: /cart
+            method: GET,POST
+            task_processor: main-task-processor
+            user-service-url: $user-service-url
+            item-service-url: $item-service-url
+            cart-service-url: $cart-service-url
+            
+        handler-ping:
+            path: /ping
+            method: GET
+            task_processor: main-task-processor
+            throttling_enabled: false
+        tests-control:
+            load-enabled: $testsuite-enabled
+            path: /tests/{action}
+            method: POST
+            task_processor: main-task-processor
+            throttling_enabled: false
+
+config_vars: configs/config_vars.yaml
+
+
+================================================================================
+ФАЙЛ: .\store\api-gateway\configs\config_vars.yaml
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\api-gateway\src\main.cpp
+================================================================================
+
+#include <userver/components/minimal_server_component_list.hpp>
+#include <userver/testsuite/testsuite_support.hpp>
+#include <userver/utils/daemon_run.hpp>
+#include <userver/server/handlers/ping.hpp>
+#include <userver/clients/dns/component.hpp>
+#include <userver/clients/http/component_list.hpp>
+#include <userver/server/handlers/tests_control.hpp>
+#include <handlers/gateway.hpp>
+
+int main(int argc, char* argv[]) {
+    auto component_list =
+        userver::components::MinimalServerComponentList()
+            .Append<userver::components::TestsuiteSupport>()
+            .Append<gateway::GatewayHandler>("handler-gateway-users")
+            .Append<gateway::GatewayHandler>("handler-gateway-items")
+            .Append<gateway::GatewayHandler>("handler-gateway-items-root")
+            .Append<gateway::GatewayHandler>("handler-gateway-cart")
+            .Append<gateway::GatewayHandler>("handler-gateway-cart-root")
+            .Append<userver::server::handlers::Ping>()
+            .AppendComponentList(userver::clients::http::ComponentList())
+            .Append<userver::clients::dns::Component>()
+            .Append<userver::server::handlers::TestsControl>();
+
+    return userver::utils::DaemonMain(argc, argv, component_list);
+}
+
+
+================================================================================
+ФАЙЛ: .\store\api-gateway\src\handlers\gateway.cpp
+================================================================================
+
+#include <handlers/gateway.hpp>
+#include <userver/components/component_context.hpp>
+#include <userver/components/component_config.hpp>
+#include <userver/clients/http/component.hpp>
+#include <userver/server/handlers/exceptions.hpp>
+#include <userver/yaml_config/merge_schemas.hpp>
+#include <userver/formats/json/value.hpp>
+#include <userver/formats/json/value_builder.hpp>
+
+namespace gateway {
+
+GatewayHandler::GatewayHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      http_client_(context.FindComponent<userver::components::HttpClient>()
+                       .GetHttpClient()),
+      user_service_url_(config["user-service-url"].As<std::string>()),
+      item_service_url_(config["item-service-url"].As<std::string>()),
+      cart_service_url_(config["cart-service-url"].As<std::string>()) {}
+
+std::string GatewayHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    // 1. ИСПОЛЬЗУЕМ GetRequestPath() вместо GetUrl()
+    const std::string path = request.GetRequestPath();
+    const auto& method = request.GetMethod();
+
+    const bool is_public = (path == "/users/register" || path == "/users/login");
+
+    int user_id = 0;
+    std::string role;
+
+    if (!is_public) {
+        const auto& auth = request.GetHeader("Authorization");
+        if (auth.empty()) {
+            request.GetHttpResponse().SetStatus(userver::server::http::HttpStatus::kUnauthorized);
+            return R"({"message": "Missing token"})";
+        }
+
+        // Валидация токена
+        auto validate_response = http_client_.CreateRequest()
+            .get(user_service_url_ + "/users/validate")
+            .headers({{"Authorization", std::string(auth)}})
+            .timeout(std::chrono::seconds{5})
+            .perform();
+
+        if (validate_response->status_code() != 200) {
+            request.GetHttpResponse().SetStatus(userver::server::http::HttpStatus::kUnauthorized);
+            return R"({"message": "Invalid or expired token"})";
+        }
+
+        auto json = userver::formats::json::FromString(validate_response->body());
+        user_id = json["user_id"].As<int>();
+        role = json["role"].As<std::string>();
+
+        // Проверка прав для DELETE/POST/PUT в /items
+        if (path.find("/items") == 0 && 
+            method != userver::server::http::HttpMethod::kGet) {
+            if (role != "seller") {
+                request.GetHttpResponse().SetStatus(userver::server::http::HttpStatus::kForbidden);
+                return R"({"message": "Forbidden: seller role required"})";
+            }
+        }
+    }
+
+    // 2. ФОРМИРУЕМ ЦЕЛЕВОЙ URL
+    std::string target_base_url;
+    if (path.find("/users") == 0) {
+        target_base_url = user_service_url_;
+    } else if (path.find("/items") == 0) {
+        target_base_url = item_service_url_;
+    } else if (path.find("/cart") == 0) {
+        target_base_url = cart_service_url_;
+    } else {
+        throw userver::server::handlers::ResourceNotFound();
+    }
+
+    std::string target_url = target_base_url + path;
+
+    // 3. ЛОГИРУЕМ ПУТЬ (чтобы видеть ошибки в консоли)
+    LOG_INFO() << "Gateway Forwarding: " << method << " " << path << " -> " << target_url;
+
+    auto req = http_client_.CreateRequest()
+        .url(target_url)
+        .timeout(std::chrono::seconds{10});
+
+    // Прокидываем заголовки авторизации
+    if (user_id != 0) {
+        req.headers({
+            {"X-User-Id", std::to_string(user_id)},
+            {"X-User-Role", role}
+        });
+    }
+
+    // Правильно обрабатываем методы
+    if (method == userver::server::http::HttpMethod::kPost) {
+        req.post(target_url, request.RequestBody());
+    } else if (method == userver::server::http::HttpMethod::kPut) {
+        req.put(target_url, request.RequestBody());
+    } else if (method == userver::server::http::HttpMethod::kDelete) {
+        req.delete_method(target_url, request.RequestBody()); // Явно передаем URL
+    } else {
+        req.get(target_url);
+    }
+
+    auto response = req.perform();
+
+    request.GetHttpResponse().SetStatus(
+        static_cast<userver::server::http::HttpStatus>(response->status_code()));
+    request.GetHttpResponse().SetContentType("application/json");
+    
+    return response->body();
+}
+
+userver::yaml_config::Schema GatewayHandler::GetStaticConfigSchema() {
+    return userver::yaml_config::MergeSchemas<userver::server::handlers::HttpHandlerBase>(R"(
+        type: object
+        description: Gateway handler
+        additionalProperties: false
+        properties:
+            user-service-url:
+                type: string
+                description: URL of user service
+            item-service-url:
+                type: string
+                description: URL of item service
+            cart-service-url:
+                type: string
+                description: URL of cart service
+        )");
+}
+
+}  // namespace gateway
+
+
+================================================================================
+ФАЙЛ: .\store\api-gateway\src\handlers\gateway.hpp
+================================================================================
+
+#pragma once
+#include <userver/server/handlers/http_handler_base.hpp>
+#include <userver/clients/http/client.hpp>
+#include <userver/yaml_config/schema.hpp>
+
+namespace gateway {
+
+class GatewayHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    // static constexpr std::string_view kName = "handler-gateway";
+
+    GatewayHandler(const userver::components::ComponentConfig& config,
+                   const userver::components::ComponentContext& context);
+
+    static userver::yaml_config::Schema GetStaticConfigSchema();
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    userver::clients::http::Client& http_client_;
+    std::string user_service_url_;
+    std::string item_service_url_;
+    std::string cart_service_url_;
+};
+
+}  // namespace gateway
+
+
+================================================================================
+ФАЙЛ: .\store\api-gateway\tests\conftest.py
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\api-gateway\tests\test_gateway.py
+================================================================================
+
+async def test_ping(service_client):
+    response = await service_client.get('/ping')
+    assert response.status == 200
+
+
+async def test_register(service_client, mockserver):
+    @mockserver.json_handler('/user-service/users/register')
+    def mock_register(request):
+        return {'id': 1, 'username': 'pavel'}
+
+    response = await service_client.post(
+        '/users/register',
+        json={
+            'username': 'pavel',
+            'password': '123',
+            'name': 'Pavel',
+            'role': 'client'
+        }
+    )
+    assert response.status == 200
+
+
+async def test_login(service_client, mockserver):
+    @mockserver.json_handler('/user-service/users/login')
+    def mock_login(request):
+        return {'token': 'test-token-123'}
+
+    response = await service_client.post(
+        '/users/login',
+        json={'username': 'pavel', 'password': '123'}
+    )
+    assert response.status == 200
+    assert 'token' in response.json()
+
+
+async def test_unauthorized(service_client, mockserver):
+    @mockserver.json_handler('/user-service/users/validate')
+    def mock_validate(request):
+        return mockserver.make_response(status=401)
+
+    response = await service_client.get('/items')
+    assert response.status == 401
+
+
+async def test_get_items_as_client(service_client, mockserver):
+    @mockserver.json_handler('/user-service/users/validate')
+    def mock_validate(request):
+        return {'user_id': 1, 'valid': True, 'role': 'client'}
+
+    @mockserver.json_handler('/item-service/items')
+    def mock_items(request):
+        return [{'id': 1, 'name': 'laptop', 'price': 999.99, 'quantity': 5}]
+
+    response = await service_client.get(
+        '/items',
+        headers={'Authorization': 'Bearer test-token'}
+    )
+    assert response.status == 200
+
+
+async def test_create_item_forbidden_for_client(service_client, mockserver):
+    @mockserver.json_handler('/user-service/users/validate')
+    def mock_validate(request):
+        return {'user_id': 1, 'valid': True, 'role': 'client'}
+
+    response = await service_client.post(
+        '/items',
+        json={'name': 'laptop', 'price': 999.99, 'quantity': 5},
+        headers={'Authorization': 'Bearer test-token'}
+    )
+    assert response.status == 403
+
+
+async def test_create_item_allowed_for_seller(service_client, mockserver):
+    @mockserver.json_handler('/user-service/users/validate')
+    def mock_validate(request):
+        return {'user_id': 1, 'valid': True, 'role': 'seller'}
+
+    @mockserver.json_handler('/item-service/items')
+    def mock_create_item(request):
+        return {'id': 1}
+
+    response = await service_client.post(
+        '/items',
+        json={'name': 'laptop', 'price': 999.99, 'quantity': 5},
+        headers={'Authorization': 'Bearer test-token'}
+    )
+    assert response.status == 200
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\CMakeLists.txt
+================================================================================
+
+cmake_minimum_required(VERSION 3.22)
+project(cart-service)
+
+find_package(userver REQUIRED COMPONENTS core chaotic mongo)
+
+add_executable(cart-service
+    src/main.cpp
+    src/handlers/cart.cpp
+    src/storage/cart_storage.cpp
+)
+
+file(GLOB_RECURSE SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/schemas/*.yaml)
+
+userver_target_generate_chaotic(
+    ${PROJECT_NAME}-chgen
+    GENERATE_SERIALIZERS
+    LAYOUT "/components/schemas/([^/]*)/=cart_service::{0}"
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/src
+    SCHEMAS ${SCHEMAS}
+    RELATIVE_TO ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(cart-service
+    userver::core
+    userver::chaotic
+    userver::mongo
+    ${PROJECT_NAME}-chgen
+)
+
+target_include_directories(cart-service PRIVATE
+    src
+    ${CMAKE_CURRENT_BINARY_DIR}/src
+)
+
+userver_testsuite_add(
+    SERVICE_TARGET cart-service
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    PYTEST_ARGS
+        --service-config=${CMAKE_CURRENT_SOURCE_DIR}/configs/config.yaml
+        --service-binary=${CMAKE_CURRENT_BINARY_DIR}/cart-service
+)
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\Dockerfile
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\configs\config.yaml
+================================================================================
+
+components_manager:
+    task_processors:
+        main-task-processor:
+            worker_threads: 4
+        fs-task-processor:
+            worker_threads: 2
+    default_task_processor: main-task-processor
+    components:
+        server:
+            listener:
+                port: 8083
+                task_processor: main-task-processor
+        logging:
+            fs-task-processor: fs-task-processor
+            loggers:
+                default:
+                    file_path: '@stdout'
+                    level: info
+        dynamic-config:
+            defaults: {}
+        testsuite-support: {}
+        http-client:
+        http-client-core:
+            fs-task-processor: fs-task-processor
+        dns-client:
+            fs-task-processor: fs-task-processor
+        cart-storage: {}
+        mongo-cart:
+            dbconnection: mongodb://localhost:27017/store_db
+            dns_resolver: async
+        handler-get-cart:
+            path: /cart
+            method: GET
+            task_processor: main-task-processor
+        handler-add-to-cart:
+            path: /cart
+            method: POST
+            task_processor: main-task-processor
+            # item-service-url: $item-service-url
+            item-service-url: "http://localhost:8082"
+        handler-remove-from-cart:
+            path: /cart/{item_id}
+            method: DELETE
+            task_processor: main-task-processor
+        handler-ping:
+            path: /ping
+            method: GET
+            task_processor: main-task-processor
+            throttling_enabled: false
+        tests-control:
+            load-enabled: $testsuite-enabled
+            path: /tests/{action}
+            method: POST
+            task_processor: main-task-processor
+            throttling_enabled: false
+
+config_vars: configs/config_vars.yaml
+
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\configs\config_vars.yaml
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\schemas\cart.yaml
+================================================================================
+
+components:
+  schemas:
+    AddToCartRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        item_id:
+          type: string
+        quantity:
+          type: integer
+      required:
+        - item_id
+        - quantity
+
+    CartItem:
+      type: object
+      additionalProperties: false
+      properties:
+        item_id:
+          type: string
+        quantity:
+          type: integer
+
+    Cart:
+      type: object
+      additionalProperties: false
+      properties:
+        user_id:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CartItem'
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\src\main.cpp
+================================================================================
+
+#include <userver/components/minimal_server_component_list.hpp>
+#include <userver/testsuite/testsuite_support.hpp>
+#include <userver/utils/daemon_run.hpp>
+#include <userver/server/handlers/ping.hpp>
+#include <userver/clients/dns/component.hpp>
+#include <userver/clients/http/component_list.hpp>
+#include <userver/server/handlers/tests_control.hpp>
+#include <handlers/cart.hpp>
+#include <storage/cart_storage.hpp>
+#include <userver/storages/mongo/component.hpp>
+
+int main(int argc, char* argv[]) {
+    auto component_list =
+        userver::components::MinimalServerComponentList()
+            .Append<userver::components::Mongo>("mongo-cart")
+            .Append<userver::components::TestsuiteSupport>()
+            .Append<cart_service::CartStorage>()
+            .Append<cart_service::GetCartHandler>()
+            .Append<cart_service::AddToCartHandler>()
+            .Append<cart_service::RemoveFromCartHandler>()
+            .Append<userver::server::handlers::Ping>()
+            .AppendComponentList(userver::clients::http::ComponentList())
+            .Append<userver::clients::dns::Component>()
+            .Append<userver::server::handlers::TestsControl>();
+
+    return userver::utils::DaemonMain(argc, argv, component_list);
+}
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\src\handlers\cart.cpp
+================================================================================
+
+#include <handlers/cart.hpp>
+#include <userver/formats/json/value.hpp>
+#include <userver/formats/json/value_builder.hpp>
+#include <userver/server/handlers/exceptions.hpp>
+#include <userver/components/component_context.hpp>
+#include <userver/components/component_config.hpp>
+#include <userver/clients/http/component.hpp>
+#include <schemas/cart.hpp>
+#include <userver/yaml_config/merge_schemas.hpp>
+
+namespace cart_service {
+
+GetCartHandler::GetCartHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<cart_service::CartStorage>()) {}
+
+std::string GetCartHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    const auto& user_id_str = request.GetHeader("X-User-Id");
+    if (user_id_str.empty()) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Missing user id"});
+    }
+    const int user_id = std::stoi(user_id_str);
+
+    const auto db_items = storage_.GetItems(user_id);
+
+    cart_service::Cart response;
+    response.user_id = user_id;
+    response.items.emplace(); 
+
+    for (const auto& db_item : db_items) {
+        cart_service::CartItem api_item;
+        api_item.item_id = db_item.item_id;
+        api_item.quantity = db_item.quantity;
+
+        response.items->push_back(std::move(api_item));
+    }
+
+    request.GetHttpResponse().SetContentType("application/json");
+    return userver::formats::json::ToString(
+        userver::formats::json::ValueBuilder{response}.ExtractValue()
+    );
+}
+AddToCartHandler::AddToCartHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<cart_service::CartStorage>()),
+      http_client_(context.FindComponent<userver::components::HttpClient>().GetHttpClient()),
+      item_service_url_(config["item-service-url"].As<std::string>()) {}
+
+std::string AddToCartHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    const auto& user_id_str = request.GetHeader("X-User-Id");
+    if (user_id_str.empty()) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Missing user id"});
+    }
+    const int user_id = std::stoi(user_id_str);
+
+    auto req = userver::formats::json::FromString(request.RequestBody()).As<AddToCartRequest>();
+
+    auto item_response = http_client_.CreateRequest()
+        .get(item_service_url_ + "/items/" + req.item_id)
+        .timeout(std::chrono::seconds{5})
+        .perform();
+
+    if (item_response->status_code() == 404) {
+        throw userver::server::handlers::ResourceNotFound();
+    }
+
+    auto item_json = userver::formats::json::FromString(item_response->body());
+    if (req.quantity > item_json["quantity"].As<int>()) {
+        throw userver::server::handlers::ClientError(
+            userver::server::handlers::ExternalBody{"Not enough items in stock"});
+    }
+
+    storage_.AddItem(user_id, req.item_id, req.quantity);
+
+    request.GetHttpResponse().SetContentType("application/json");
+    return R"({"status": "ok"})";
+}
+
+RemoveFromCartHandler::RemoveFromCartHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<cart_service::CartStorage>()) {}
+
+std::string RemoveFromCartHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    const auto& user_id_str = request.GetHeader("X-User-Id");
+    if (user_id_str.empty()) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Missing user id"});
+    }
+    const int user_id = std::stoi(user_id_str);
+    const std::string item_id =  request.GetPathArg("item_id");
+    storage_.RemoveItem(user_id, item_id);
+
+    request.GetHttpResponse().SetStatus(userver::server::http::HttpStatus::kNoContent);
+    return "";
+}
+
+userver::yaml_config::Schema AddToCartHandler::GetStaticConfigSchema() {
+  return userver::yaml_config::MergeSchemas<userver::server::handlers::HttpHandlerBase>(R"(
+type: object
+description: AddToCartHandler handler schema
+additionalProperties: false
+properties:
+    item-service-url:
+        type: string
+        description: url of item-service
+)");
+}
+
+} // namespace cart_service
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\src\handlers\cart.hpp
+================================================================================
+
+#pragma once
+#include <userver/server/handlers/http_handler_base.hpp>
+#include <userver/clients/http/client.hpp>
+#include <userver/yaml_config/schema.hpp>
+#include <userver/components/component_base.hpp>
+#include <storage/cart_storage.hpp>
+
+namespace cart_service {
+
+class GetCartHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-get-cart";
+
+    GetCartHandler(const userver::components::ComponentConfig& config,
+                   const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    cart_service::CartStorage& storage_;
+};
+
+class AddToCartHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-add-to-cart";
+
+    AddToCartHandler(const userver::components::ComponentConfig& config,
+                     const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+    static userver::yaml_config::Schema GetStaticConfigSchema();
+
+private:
+    cart_service::CartStorage& storage_;
+    userver::clients::http::Client& http_client_;
+    std::string item_service_url_;
+};
+
+class RemoveFromCartHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-remove-from-cart";
+
+    RemoveFromCartHandler(const userver::components::ComponentConfig& config,
+                          const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    cart_service::CartStorage& storage_;
+};
+
+}  // namespace cart_service
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\src\storage\cart_storage.cpp
+================================================================================
+
+#include "cart_storage.hpp"
+#include <userver/components/component_context.hpp>
+#include <userver/storages/mongo/component.hpp>
+#include <userver/formats/bson/inline.hpp>
+#include <userver/formats/bson/value_builder.hpp>
+
+namespace cart_service {
+
+using userver::formats::bson::MakeDoc;
+
+CartStorage::CartStorage(const userver::components::ComponentConfig& config,
+                         const userver::components::ComponentContext& context)
+    : ComponentBase(config, context),
+      pool_(context.FindComponent<userver::components::Mongo>("mongo-cart").GetPool()) {}
+
+void CartStorage::AddItem(int user_id, const std::string& item_id, int quantity) {
+    auto col = pool_->GetCollection("carts");
+    auto result = col.UpdateOne(
+        MakeDoc("user_id", user_id, "items.item_id", item_id),
+        MakeDoc("$inc", MakeDoc("items.$.quantity", quantity))
+    );
+    if (result.MatchedCount() == 0) {
+        col.UpdateOne(
+            MakeDoc("user_id", user_id),
+            MakeDoc("$push", MakeDoc("items", MakeDoc("item_id", item_id, "quantity", quantity))),
+            userver::storages::mongo::options::Upsert{}
+        );
+    }
+}
+
+std::vector<CartItem> CartStorage::GetItems(int user_id) {
+    auto col = pool_->GetCollection("carts");
+    auto result = col.FindOne(MakeDoc("user_id", user_id));
+    std::vector<CartItem> items;
+    if (!result) return items;
+
+    const auto& items_arr = (*result)["items"];
+    if (!items_arr.IsArray()) return items;
+    for (const auto& elem : items_arr) {
+        CartItem ci;
+        ci.item_id = elem["item_id"].As<std::string>();
+        ci.quantity = elem["quantity"].As<int>();
+        items.push_back(ci);
+    }
+    return items;
+}
+
+void CartStorage::RemoveItem(int user_id, const std::string& item_id) {
+    auto col = pool_->GetCollection("carts");
+    col.UpdateOne(
+        MakeDoc("user_id", user_id),
+        MakeDoc("$pull", MakeDoc("items", MakeDoc("item_id", item_id)))
+    );
+}
+
+void CartStorage::ClearCart(int user_id) {
+    auto col = pool_->GetCollection("carts");
+    col.UpdateOne(
+        MakeDoc("user_id", user_id),
+        MakeDoc("$set", MakeDoc("items", userver::formats::bson::MakeArray()))
+    );
+}
+
+} // namespace cart_service
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\src\storage\cart_storage.hpp
+================================================================================
+
+#pragma once
+#include <string>
+#include <vector>
+#include <userver/components/component_base.hpp>
+#include <userver/storages/mongo/component.hpp>
+#include <userver/storages/mongo/pool.hpp>
+#include <schemas/cart.hpp>
+
+namespace cart_service {
+
+class CartStorage final : public userver::components::ComponentBase {
+public:
+    static constexpr std::string_view kName = "cart-storage";
+
+    CartStorage(const userver::components::ComponentConfig& config,
+                const userver::components::ComponentContext& context);
+
+    void AddItem(int user_id, const std::string& item_id, int quantity);
+    std::vector<CartItem> GetItems(int user_id);
+    void RemoveItem(int user_id, const std::string& item_id);
+    void ClearCart(int user_id);
+
+private:
+    userver::storages::mongo::PoolPtr pool_;
+};
+
+} // namespace cart_service
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\tests\conftest.py
+================================================================================
+
+import pytest
+
+# Оставляем только базовый плагин, как у тебя и было
+pytest_plugins = ['pytest_userver.plugins.core']
+
+# Регистрируем хук для правки конфигурации
+USERVER_CONFIG_HOOKS = ['patch_cart_service_config']
+
+@pytest.fixture(scope='session')
+def patch_cart_service_config(mockserver_info):
+    def do_patch(config_yaml, config_vars):
+        components = config_yaml['components_manager']['components']
+        
+        # Меняем URL именно в хендлере добавления в корзину
+        if 'handler-add-to-cart' in components:
+            components['handler-add-to-cart']['item-service-url'] = mockserver_info.url('item-service')
+            
+    return do_patch
+
+@pytest.fixture(name='mock_item_service')
+def _mock_item_service(mockserver):
+    @mockserver.json_handler('/item-service/items/', prefix=True)
+    def _handler(request):
+        item_id = request.path.split('/')[-1]
+        return {
+            'id': int(item_id) if item_id.isdigit() else 1,
+            'name': 'Test Item',
+            'price': 100,
+            'quantity': 1000
+        }
+    return _handler
+
+
+
+
+================================================================================
+ФАЙЛ: .\store\cart-service\tests\test_cart.py
+================================================================================
+
+async def test_ping(service_client):
+    response = await service_client.get('/ping')
+    assert response.status == 200
+
+
+async def test_get_cart_unauthorized(service_client):
+    response = await service_client.get('/cart')
+    assert response.status == 401
+
+
+async def test_add_to_cart(service_client, mock_item_service):
+    response = await service_client.post(
+        '/cart',
+        json={'item_id': 1, 'quantity': 2},
+        headers={'X-User-Id': '1'}
+    )
+    assert response.status == 200
+    assert mock_item_service.times_called > 0
+
+async def test_get_cart(service_client, mock_item_service):
+    await service_client.post(
+        '/cart',
+        json={'item_id': 1, 'quantity': 2},
+        headers={'X-User-Id': '1'}
+    )
+
+    response = await service_client.get(
+        '/cart',
+        headers={'X-User-Id': '1'}
+    )
+    assert response.status == 200
+    data = response.json()
+    assert 'items' in data
+    assert len(data['items']) == 1
+    assert data['items'][0]['item_id'] == 1
+
+async def test_remove_from_cart(service_client, mock_item_service):
+    await service_client.post(
+        '/cart',
+        json={'item_id': 1, 'quantity': 1},
+        headers={'X-User-Id': '1'}
+    )
+
+    response = await service_client.delete(
+        '/cart/1',
+        headers={'X-User-Id': '1'}
+    )
+    assert response.status in (200, 204)
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\CMakeLists.txt
+================================================================================
+
+cmake_minimum_required(VERSION 3.22)
+project(item-service)
+
+find_package(userver REQUIRED COMPONENTS core chaotic mongo)
+
+add_executable(item-service
+    src/main.cpp
+    src/handlers/items.cpp
+    src/storage/items_storage.cpp
+)
+
+file(GLOB_RECURSE SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/schemas/*.yaml)
+
+userver_target_generate_chaotic(
+    ${PROJECT_NAME}-chgen
+    GENERATE_SERIALIZERS
+    LAYOUT "/components/schemas/([^/]*)/=item_service::{0}"
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/src
+    SCHEMAS ${SCHEMAS}
+    RELATIVE_TO ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(item-service
+    userver::core
+    userver::chaotic
+    userver::mongo
+    ${PROJECT_NAME}-chgen
+)
+
+target_include_directories(item-service PRIVATE
+    src
+    ${CMAKE_CURRENT_BINARY_DIR}/src
+)
+
+userver_testsuite_add(
+    SERVICE_TARGET item-service
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    PYTEST_ARGS
+        --service-config=${CMAKE_CURRENT_SOURCE_DIR}/configs/config.yaml
+        --service-binary=${CMAKE_CURRENT_BINARY_DIR}/item-service
+)
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\Dockerfile
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\configs\config.yaml
+================================================================================
+
+components_manager:
+    task_processors:
+        main-task-processor:
+            worker_threads: 4
+        fs-task-processor:
+            worker_threads: 2
+    default_task_processor: main-task-processor
+    components:
+        server:
+            listener:
+                port: 8082
+                task_processor: main-task-processor
+        logging:
+            fs-task-processor: fs-task-processor
+            loggers:
+                default:
+                    file_path: '@stdout'
+                    level: info
+        dynamic-config:
+            defaults: {}
+        testsuite-support: {}
+        http-client:
+        http-client-core:
+            fs-task-processor: fs-task-processor
+        dns-client:
+            fs-task-processor: fs-task-processor
+        items-storage: {}
+        mongo-items:
+            dbconnection: mongodb://localhost:27017/store_db
+            dns_resolver: async
+        handler-get-items:
+            path: /items
+            method: GET
+            task_processor: main-task-processor
+        handler-get-item:
+            path: /items/{id}
+            method: GET
+            task_processor: main-task-processor
+        handler-create-item:
+            path: /items
+            method: POST
+            task_processor: main-task-processor
+        handler-update-item:
+            path: /items/{id}
+            method: PUT
+            task_processor: main-task-processor
+        handler-delete-item:
+            path: /items/{id}
+            method: DELETE
+            task_processor: main-task-processor
+        handler-ping:
+            path: /ping
+            method: GET
+            task_processor: main-task-processor
+            throttling_enabled: false
+        tests-control:
+            load-enabled: $testsuite-enabled
+            path: /tests/{action}
+            method: POST
+            task_processor: main-task-processor
+            throttling_enabled: false
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\schemas\item.yaml
+================================================================================
+
+components:
+  schemas:
+    CreateItemRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        quantity:
+          type: integer
+      required:
+        - name
+        - price
+        - quantity
+
+    UpdateItemRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        quantity:
+          type: integer
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\src\main.cpp
+================================================================================
+
+#include <userver/components/minimal_server_component_list.hpp>
+#include <userver/testsuite/testsuite_support.hpp>
+#include <userver/utils/daemon_run.hpp>
+#include <userver/server/handlers/ping.hpp>
+#include <userver/clients/dns/component.hpp>
+#include <userver/clients/http/component_list.hpp>
+#include <userver/server/handlers/tests_control.hpp>
+#include <handlers/items.hpp>
+#include <storage/items_storage.hpp>
+#include <userver/storages/mongo/component.hpp>
+
+int main(int argc, char* argv[]) {
+    auto component_list =
+        userver::components::MinimalServerComponentList()
+            .Append<userver::components::Mongo>("mongo-items")
+            .Append<userver::components::TestsuiteSupport>()
+            .Append<item_service::ItemsStorage>()
+            .Append<item_service::GetItemsHandler>()
+            .Append<item_service::GetItemHandler>()
+            .Append<item_service::CreateItemHandler>()
+            .Append<item_service::UpdateItemHandler>()
+            .Append<item_service::DeleteItemHandler>()
+            .Append<userver::server::handlers::Ping>()
+            .AppendComponentList(userver::clients::http::ComponentList())
+            .Append<userver::clients::dns::Component>()
+            .Append<userver::server::handlers::TestsControl>();
+
+    return userver::utils::DaemonMain(argc, argv, component_list);
+}
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\src\handlers\items.cpp
+================================================================================
+
+#include <handlers/items.hpp>
+#include <userver/formats/json/value.hpp>
+#include <userver/formats/json/value_builder.hpp>
+#include <userver/server/handlers/exceptions.hpp>
+#include <userver/components/component_context.hpp>
+#include <schemas/item.hpp>
+
+namespace item_service {
+
+namespace {
+
+userver::formats::json::Value ItemToJson(const Item& item) {
+    userver::formats::json::ValueBuilder builder;
+    builder["id"] = item.id;
+    builder["name"] = item.name;
+    builder["description"] = item.description;
+    builder["price"] = item.price;
+    builder["quantity"] = item.quantity;
+    return builder.ExtractValue();
+}
+
+}  // namespace
+
+GetItemsHandler::GetItemsHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<ItemsStorage>()) {}
+
+std::string GetItemsHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    const auto items = storage_.GetAllItems();
+
+    userver::formats::json::ValueBuilder result;
+    result = userver::formats::json::ValueBuilder(
+        userver::formats::json::Type::kArray);
+
+    for (const auto& item : items) {
+        result.PushBack(ItemToJson(item));
+    }
+
+    request.GetHttpResponse().SetContentType("application/json");
+    return userver::formats::json::ToString(result.ExtractValue());
+}
+
+GetItemHandler::GetItemHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<ItemsStorage>()) {}
+
+std::string GetItemHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    const std::string id = request.GetPathArg("id");
+    auto item = storage_.GetItem(id);
+    if (!item) {
+        throw userver::server::handlers::ResourceNotFound();
+    }
+
+    request.GetHttpResponse().SetContentType("application/json");
+    return userver::formats::json::ToString(ItemToJson(*item));
+}
+
+CreateItemHandler::CreateItemHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<ItemsStorage>()) {}
+
+std::string CreateItemHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    auto body = userver::formats::json::FromString(request.RequestBody());
+    auto req = body.As<CreateItemRequest>();
+
+    const std::string description = req.description.value_or("");
+    const std::string id = storage_.AddItem(req.name, description, req.price, req.quantity);
+
+    userver::formats::json::ValueBuilder result;
+    result["id"] = id;
+
+    request.GetHttpResponse().SetStatus(
+        userver::server::http::HttpStatus::kCreated);
+    request.GetHttpResponse().SetContentType("application/json");
+    return userver::formats::json::ToString(result.ExtractValue());
+}
+
+UpdateItemHandler::UpdateItemHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<ItemsStorage>()) {}
+
+std::string UpdateItemHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    const std::string id =  request.GetPathArg("id");
+    auto body = userver::formats::json::FromString(request.RequestBody());
+    auto req = body.As<UpdateItemRequest>();
+
+    const bool updated = storage_.UpdateItem(
+        id, req.name, req.description, req.price, req.quantity);
+
+    if (!updated) {
+        throw userver::server::handlers::ResourceNotFound();
+    }
+
+    request.GetHttpResponse().SetContentType("application/json");
+    return R"({"status": "ok"})";
+}
+
+DeleteItemHandler::DeleteItemHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<ItemsStorage>()) {}
+
+std::string DeleteItemHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    const std::string id =  request.GetPathArg("id");
+    const bool deleted = storage_.DeleteItem(id);
+
+    if (!deleted) {
+        throw userver::server::handlers::ResourceNotFound();
+    }
+
+    request.GetHttpResponse().SetStatus(
+        userver::server::http::HttpStatus::kNoContent);
+    return "";
+}
+
+}  // namespace item_service
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\src\handlers\items.hpp
+================================================================================
+
+#pragma once
+#include <userver/server/handlers/http_handler_base.hpp>
+#include <storage/items_storage.hpp>
+
+namespace item_service {
+
+class GetItemsHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-get-items";
+
+    GetItemsHandler(const userver::components::ComponentConfig& config,
+                    const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    ItemsStorage& storage_;
+};
+
+class GetItemHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-get-item";
+
+    GetItemHandler(const userver::components::ComponentConfig& config,
+                   const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    ItemsStorage& storage_;
+};
+
+class CreateItemHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-create-item";
+
+    CreateItemHandler(const userver::components::ComponentConfig& config,
+                      const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    ItemsStorage& storage_;
+};
+
+class UpdateItemHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-update-item";
+
+    UpdateItemHandler(const userver::components::ComponentConfig& config,
+                      const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    ItemsStorage& storage_;
+};
+
+class DeleteItemHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-delete-item";
+
+    DeleteItemHandler(const userver::components::ComponentConfig& config,
+                      const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    ItemsStorage& storage_;
+};
+
+}  // namespace item_service
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\src\storage\items_storage.cpp
+================================================================================
+
+#include "items_storage.hpp"
+#include <userver/components/component_context.hpp>
+#include <userver/storages/mongo/component.hpp>
+#include <userver/formats/bson/inline.hpp>
+#include <userver/formats/bson/value_builder.hpp>
+
+namespace item_service {
+
+using userver::formats::bson::MakeDoc;
+using userver::formats::bson::MakeArray;
+
+ItemsStorage::ItemsStorage(const userver::components::ComponentConfig& config,
+                           const userver::components::ComponentContext& context)
+    : ComponentBase(config, context),
+      pool_(context.FindComponent<userver::components::Mongo>("mongo-items").GetPool()) {}
+
+std::string ItemsStorage::AddItem(const std::string& name,
+                                   const std::string& description,
+                                   double price, int quantity) {
+    auto col = pool_->GetCollection("items");
+    auto oid = userver::formats::bson::Oid{};  // генерируется автоматически
+    col.InsertOne(MakeDoc(
+        "_id", oid,
+        "name", name,
+        "description", description,
+        "price", price,
+        "quantity", quantity
+    ));
+    return oid.ToString();
+}
+
+std::optional<Item> ItemsStorage::GetItem(const std::string& id) const {
+    auto col = pool_->GetCollection("items");
+    auto oid = userver::formats::bson::Oid{id};
+    auto result = col.FindOne(MakeDoc("_id", oid));
+    if (!result) return std::nullopt;
+
+    return Item{
+        (*result)["_id"].As<userver::formats::bson::Oid>().ToString(),
+        (*result)["name"].As<std::string>(),
+        (*result)["description"].As<std::string>(),
+        (*result)["price"].As<double>(),
+        (*result)["quantity"].As<int>()
+    };
+}
+
+std::vector<Item> ItemsStorage::GetAllItems() const {
+    auto col = pool_->GetCollection("items");
+    auto cursor = col.Find({});
+    std::vector<Item> items;
+    for (const auto& doc : cursor) {
+        items.push_back(Item{
+            doc["_id"].As<userver::formats::bson::Oid>().ToString(),
+            doc["name"].As<std::string>(),
+            doc["description"].As<std::string>(),
+            doc["price"].As<double>(),
+            doc["quantity"].As<int>()
+        });
+    }
+    return items;
+}
+
+bool ItemsStorage::UpdateItem(const std::string& id,
+                               const std::optional<std::string>& name,
+                               const std::optional<std::string>& description,
+                               const std::optional<double>& price,
+                               const std::optional<int>& quantity) {
+    auto col = pool_->GetCollection("items");
+    auto oid = userver::formats::bson::Oid{id};
+
+    userver::formats::bson::ValueBuilder set_doc;
+    if (name)        set_doc["name"] = *name;
+    if (description) set_doc["description"] = *description;
+    if (price)       set_doc["price"] = *price;
+    if (quantity)    set_doc["quantity"] = *quantity;
+
+    auto result = col.UpdateOne(
+        MakeDoc("_id", oid),
+        MakeDoc("$set", set_doc.ExtractValue())
+    );
+    return result.MatchedCount() > 0;
+}
+
+bool ItemsStorage::DeleteItem(const std::string& id) {
+    auto col = pool_->GetCollection("items");
+    auto oid = userver::formats::bson::Oid{id};
+    auto result = col.DeleteOne(MakeDoc("_id", oid));
+    return result.DeletedCount() > 0;
+}
+
+} // namespace item_storage
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\src\storage\items_storage.hpp
+================================================================================
+
+#pragma once
+#include <string>
+
+#include <optional>
+#include <vector>
+#include <userver/components/component_base.hpp>
+#include <userver/storages/mongo/component.hpp>
+#include <userver/storages/mongo/pool.hpp>
+
+namespace item_service {
+
+struct Item {
+    std::string id;
+    std::string name;
+    std::string description;
+    double price;
+    int quantity;
+};
+
+class ItemsStorage final : public userver::components::ComponentBase {
+public:
+    static constexpr std::string_view kName = "items-storage";
+
+    ItemsStorage(const userver::components::ComponentConfig& config,
+                 const userver::components::ComponentContext& context);
+
+    std::string AddItem(const std::string& name,
+                const std::string& description,
+                double price,
+                int quantity);
+
+    std::optional<Item> GetItem(const std::string& id) const;
+
+    std::vector<Item> GetAllItems() const;
+
+    bool UpdateItem(const std::string& id,
+                    const std::optional<std::string>& name,
+                    const std::optional<std::string>& description,
+                    const std::optional<double>& price,
+                    const std::optional<int>& quantity);
+
+    bool DeleteItem(const std::string& id);
+
+private:
+    userver::storages::mongo::PoolPtr pool_;
+};
+
+}  // namespace item_service
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\tests\conftest.py
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\item-service\tests\test_items.py
+================================================================================
+
+async def test_ping(service_client):
+    response = await service_client.get('/ping')
+    assert response.status == 200
+
+
+async def test_get_items_base(service_client):
+    response = await service_client.get('/items')
+    assert response.status == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) > 0
+
+
+# async def test_create_item(service_client):
+#     response = await service_client.post(
+#         '/items',
+#         json={
+#             'name': 'laptop',
+#             'description': 'good laptop',
+#             'price': 999.99,
+#             'quantity': 10
+#         }
+#     )
+#     assert response.status == 201
+#     data = response.json()
+#     assert 'id' in data
+
+
+# async def test_get_item(service_client):
+#     create = await service_client.post(
+#         '/items',
+#         json={'name': 'phone', 'price': 499.99, 'quantity': 5}
+#     )
+#     item_id = create.json()['id']
+
+#     response = await service_client.get(f'/items/{item_id}')
+#     assert response.status == 200
+#     data = response.json()
+#     assert data['name'] == 'phone'
+
+
+# async def test_update_item(service_client):
+#     create = await service_client.post(
+#         '/items',
+#         json={'name': 'tablet', 'price': 299.99, 'quantity': 3}
+#     )
+#     item_id = create.json()['id']
+
+#     response = await service_client.put(
+#         f'/items/{item_id}',
+#         json={'price': 199.99}
+#     )
+#     assert response.status == 200
+
+
+# async def test_delete_item(service_client):
+#     create = await service_client.post(
+#         '/items',
+#         json={'name': 'headphones', 'price': 99.99, 'quantity': 20}
+#     )
+#     item_id = create.json()['id']
+
+#     response = await service_client.delete(f'/items/{item_id}')
+#     assert response.status == 204
+
+#     response = await service_client.get(f'/items/{item_id}')
+#     assert response.status == 404
+
+
+# async def test_get_item_not_found(service_client):
+#     response = await service_client.get('/items/99999')
+#     assert response.status == 404
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\CMakeLists.txt
+================================================================================
+
+cmake_minimum_required(VERSION 3.22)
+project(user-service)
+
+find_package(userver REQUIRED COMPONENTS core chaotic postgresql)
+
+add_executable(user-service
+    src/main.cpp
+    src/handlers/auth.cpp
+    src/pg/users_pg.cpp
+)
+
+file(GLOB_RECURSE SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/schemas/*.yaml)
+
+userver_target_generate_chaotic(
+    ${PROJECT_NAME}-chgen
+    GENERATE_SERIALIZERS
+    LAYOUT "/components/schemas/([^/]*)/=user_service::{0}"
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/src
+    SCHEMAS ${SCHEMAS}
+    RELATIVE_TO ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(user-service
+    userver::core
+    userver::chaotic
+    userver::postgresql
+    ${PROJECT_NAME}-chgen
+)
+
+target_include_directories(user-service PRIVATE
+    src
+    src/pg
+    ${CMAKE_CURRENT_BINARY_DIR}/src
+)
+
+userver_testsuite_add(
+    SERVICE_TARGET user-service
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    PYTEST_ARGS
+        --service-config=${CMAKE_CURRENT_SOURCE_DIR}/configs/config.yaml
+        --service-binary=${CMAKE_CURRENT_BINARY_DIR}/user-service
+)
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\Dockerfile
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\configs\config-vars.yaml
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\configs\config.yaml
+================================================================================
+
+components_manager:
+    task_processors:
+        main-task-processor:
+            worker_threads: 4
+        fs-task-processor:
+            worker_threads: 2
+    default_task_processor: main-task-processor
+    components:
+        server:
+            listener:
+                port: 8081
+                task_processor: main-task-processor
+        logging:
+            fs-task-processor: fs-task-processor
+            loggers:
+                default:
+                    file_path: '@stdout'
+                    level: info
+        dynamic-config:
+            defaults: {}
+        http-client:
+        http-client-core:
+            fs-task-processor: fs-task-processor
+        dns-client:
+            fs-task-processor: fs-task-processor
+        testsuite-support: {}
+        users-storage: {}
+        postgres-db:
+            dbconnection: postgresql://user:pass@db:5432/store_db
+            blocking_task_processor: fs-task-processor # важно: работа с БД идет в отдельном потоке
+            dns_resolver: async
+        handler-register:
+            path: /users/register
+            method: POST
+            task_processor: main-task-processor
+        handler-login:
+            path: /users/login
+            method: POST
+            task_processor: main-task-processor
+        handler-get-user:
+            path: /users/{id}
+            method: GET
+            task_processor: main-task-processor
+        handler-validate-token:
+            path: /users/validate
+            method: GET
+            task_processor: main-task-processor
+        handler-ping:
+            path: /ping
+            method: GET
+            task_processor: main-task-processor
+            throttling_enabled: false
+        tests-control:
+            load-enabled: $testsuite-enabled
+            path: /tests/{action}
+            method: POST
+            task_processor: main-task-processor
+            throttling_enabled: false
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\schemas\user.yaml
+================================================================================
+
+components:
+  schemas:
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+      required:
+        - username
+        - password
+        - name
+        - role
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+      required:
+        - username
+        - password
+
+    AuthResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\src\main.cpp
+================================================================================
+
+#include <userver/components/minimal_server_component_list.hpp>
+#include <userver/testsuite/testsuite_support.hpp>
+#include <userver/utils/daemon_run.hpp>
+#include <userver/server/handlers/ping.hpp>
+#include <userver/clients/dns/component.hpp>
+#include <userver/clients/http/component_list.hpp>
+#include <userver/server/handlers/tests_control.hpp>
+#include <handlers/auth.hpp>
+#include <storage/users_storage.hpp>
+#include <userver/storages/postgres/component.hpp>
+
+int main(int argc, char* argv[]) {
+    auto component_list =
+        userver::components::MinimalServerComponentList()
+            .Append<userver::components::Postgres>("postgres-db")
+            .Append<user_service::UsersStorage>()
+            .Append<userver::components::TestsuiteSupport>()
+            .Append<user_service::RegisterHandler>()
+            .Append<user_service::LoginHandler>()
+            .Append<user_service::GetUserHandler>()
+            .Append<user_service::ValidateTokenHandler>()
+            .Append<userver::server::handlers::Ping>()
+            .AppendComponentList(userver::clients::http::ComponentList())
+            .Append<userver::clients::dns::Component>()
+            .Append<userver::server::handlers::TestsControl>();
+
+    return userver::utils::DaemonMain(argc, argv, component_list);
+}
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\src\handlers\auth.cpp
+================================================================================
+
+#include <handlers/auth.hpp>
+#include <userver/formats/json/value.hpp>
+#include <userver/formats/json/value_builder.hpp>
+#include <userver/server/handlers/exceptions.hpp>
+#include <userver/components/component_context.hpp>
+
+#include <schemas/user.hpp>
+#include <random>
+#include <sstream>
+#include <iomanip>
+
+namespace user_service {
+
+namespace {
+std::string GenerateToken() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 255);
+    std::ostringstream oss;
+    for (int i = 0; i < 32; ++i) {
+        oss << std::hex << std::setw(2) << std::setfill('0') << dis(gen);
+    }
+    return oss.str();
+}
+}
+
+RegisterHandler::RegisterHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<UsersStorage>()) {}
+
+std::string RegisterHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    auto body = userver::formats::json::FromString(request.RequestBody());
+    auto req = body.As<RegisterRequest>();
+
+    Role role = (req.role == "seller") ? Role::Seller : Role::Client;
+
+    auto id = storage_.AddUser(req.username, req.password, req.name, role);
+    if (!id) {
+        throw userver::server::handlers::ClientError(
+            userver::server::handlers::ExternalBody{"Username already taken"});
+    }
+
+    userver::formats::json::ValueBuilder result;
+    result["id"] = *id;
+    result["username"] = req.username;
+
+    request.GetHttpResponse().SetStatus(
+        userver::server::http::HttpStatus::kCreated);
+    request.GetHttpResponse().SetContentType("application/json");
+    return userver::formats::json::ToString(result.ExtractValue());
+}
+
+LoginHandler::LoginHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<UsersStorage>()) {}
+
+std::string LoginHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    auto body = userver::formats::json::FromString(request.RequestBody());
+    auto req = body.As<LoginRequest>();
+
+    auto user = storage_.FindUser(req.username, req.password);
+    if (!user) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Invalid username or password"});
+    }
+
+    const auto token = GenerateToken();
+    storage_.SaveToken(token, user->id);
+
+    userver::formats::json::ValueBuilder result;
+    result["token"] = token;
+    request.GetHttpResponse().SetContentType("application/json");
+    return userver::formats::json::ToString(result.ExtractValue());
+}
+
+GetUserHandler::GetUserHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<UsersStorage>()) {}
+
+std::string GetUserHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    const auto& token = request.GetHeader("Authorization");
+    if (token.empty()) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Missing token"});
+    }
+
+    const std::string bearer_prefix = "Bearer ";
+    if (token.substr(0, bearer_prefix.size()) != bearer_prefix) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Invalid token format"});
+    }
+    const auto actual_token = token.substr(bearer_prefix.size());
+
+    if (!storage_.FindUserByToken(actual_token)) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Invalid token"});
+    }
+
+    const auto& id_str = request.GetPathArg("id");
+    int id = std::stoi(id_str);
+
+    auto user = storage_.FindUserById(id);
+    if (!user) {
+        throw userver::server::handlers::ResourceNotFound();
+    }
+
+    userver::formats::json::ValueBuilder result;
+    result["id"] = user->id;
+    result["username"] = user->username;
+    result["name"] = user->name;
+    result["role"] = (user->role == Role::Seller) ? "seller" : "client";
+
+    request.GetHttpResponse().SetContentType("application/json");
+    return userver::formats::json::ToString(result.ExtractValue());
+}
+
+ValidateTokenHandler::ValidateTokenHandler(
+    const userver::components::ComponentConfig& config,
+    const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      storage_(context.FindComponent<UsersStorage>()) {}
+
+std::string ValidateTokenHandler::HandleRequestThrow(
+    const userver::server::http::HttpRequest& request,
+    userver::server::request::RequestContext&
+) const {
+    const auto& token = request.GetHeader("Authorization");
+    if (token.empty()) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Missing token"});
+    }
+
+    const std::string bearer_prefix = "Bearer ";
+    if (token.substr(0, bearer_prefix.size()) != bearer_prefix) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Invalid token format"});
+    }
+    const auto actual_token = token.substr(bearer_prefix.size());
+
+    auto user_id = storage_.FindUserByToken(actual_token);
+    if (!user_id) {
+        throw userver::server::handlers::Unauthorized(
+            userver::server::handlers::ExternalBody{"Invalid token"});
+    }
+
+    auto user = storage_.FindUserById(*user_id);
+    
+    userver::formats::json::ValueBuilder result;
+    result["user_id"] = *user_id;
+    result["valid"] = true;
+    result["role"] = (user->role == Role::Seller) ? "seller" : "client";
+
+    request.GetHttpResponse().SetContentType("application/json");
+    return userver::formats::json::ToString(result.ExtractValue());
+}
+
+}  // namespace user_service
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\src\handlers\auth.hpp
+================================================================================
+
+#pragma once
+#include <userver/server/handlers/http_handler_base.hpp>
+#include <pg/users_pg.hpp>
+
+namespace user_service {
+
+class RegisterHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-register";
+
+    RegisterHandler(const userver::components::ComponentConfig& config,
+                    const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    UsersStorage& storage_;
+};
+
+class LoginHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-login";
+
+    LoginHandler(const userver::components::ComponentConfig& config,
+                 const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    UsersStorage& storage_;
+};
+
+class GetUserHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-get-user";
+
+    GetUserHandler(const userver::components::ComponentConfig& config,
+                   const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    UsersStorage& storage_;
+};
+
+class ValidateTokenHandler final : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-validate-token";
+
+    ValidateTokenHandler(const userver::components::ComponentConfig& config,
+                         const userver::components::ComponentContext& context);
+
+    std::string HandleRequestThrow(
+        const userver::server::http::HttpRequest& request,
+        userver::server::request::RequestContext&
+    ) const override;
+
+private:
+    UsersStorage& storage_;
+};
+
+}  // namespace user_service
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\src\pg\users_pg.cpp
+================================================================================
+
+#include "users_pg.hpp"
+#include <userver/components/component_context.hpp>
+#include <userver/storages/postgres/component.hpp>
+#include <userver/storages/postgres/cluster.hpp>
+
+namespace user_service {
+
+UsersStorage::UsersStorage(const userver::components::ComponentConfig& config,
+                           const userver::components::ComponentContext& context)
+    : ComponentBase(config, context),
+        postgres_(context.FindComponent<userver::components::Postgres>("postgres-db")
+          .GetCluster()) {}
+
+std::optional<int> UsersStorage::AddUser(const std::string& username,
+                                         const std::string& password,
+                                         const std::string& name,
+                                         Role role) {
+    try {
+        const std::string role_str = (role == Role::Seller) ? "seller" : "client";
+
+        auto result = postgres_->Execute(
+            userver::storages::postgres::ClusterHostType::kMaster,
+            "INSERT INTO users (username, password, name, role) "
+            "VALUES ($1, $2, $3, $4) RETURNING id",
+            username, password, name, role_str
+        );
+
+        return result.AsSingleRow<int>();
+        
+    } catch (const userver::storages::postgres::UniqueViolation&) {
+        return std::nullopt;  
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+std::optional<User> UsersStorage::FindUser(const std::string& username,
+                                           const std::string& password) const {
+    try {
+        auto result = postgres_->Execute(
+            userver::storages::postgres::ClusterHostType::kMaster,
+            "SELECT id, username, password, name, role FROM users "
+            "WHERE username = $1 AND password = $2",
+            username, password
+        );
+
+        if (result.IsEmpty()) {
+            return std::nullopt;
+        }
+
+        auto row = result[0];
+        std::string role_str = row["role"].As<std::string>();
+        Role role = (role_str == "seller") ? Role::Seller : Role::Client;
+
+        return User{
+            row["id"].As<int>(),
+            row["username"].As<std::string>(),
+            row["password"].As<std::string>(),
+            row["name"].As<std::string>(),
+            role
+        };
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+std::optional<User> UsersStorage::FindUserById(int id) const {
+    try {
+        auto result = postgres_->Execute(
+            userver::storages::postgres::ClusterHostType::kMaster,
+            "SELECT id, username, password, name, role FROM users WHERE id = $1",
+            id
+        );
+
+        if (result.IsEmpty()) {
+            return std::nullopt;
+        }
+
+        auto row = result[0];
+        std::string role_str = row["role"].As<std::string>();
+        Role role = (role_str == "seller") ? Role::Seller : Role::Client;
+
+        return User{
+            row["id"].As<int>(),
+            row["username"].As<std::string>(),
+            row["password"].As<std::string>(),
+            row["name"].As<std::string>(),
+            role
+        };
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+void UsersStorage::SaveToken(const std::string& token, int user_id) {
+    try {
+        postgres_->Execute(
+            userver::storages::postgres::ClusterHostType::kMaster,
+            "INSERT INTO tokens (token, user_id) VALUES ($1, $2) "
+            "ON CONFLICT (token) DO UPDATE SET user_id = $2",
+            token, user_id
+        );
+    } catch (const std::exception&) {
+        // Fail silently, token may not be saved
+    }
+}
+
+std::optional<int> UsersStorage::FindUserByToken(const std::string& token) const {
+    try {
+        auto result = postgres_->Execute(
+            userver::storages::postgres::ClusterHostType::kMaster,
+            "SELECT user_id FROM tokens WHERE token = $1",
+            token
+        );
+
+        if (result.IsEmpty()) {
+            return std::nullopt;
+        }
+
+        return result[0]["user_id"].As<int>();
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+}  // namespace user_service
+
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\src\pg\users_pg.hpp
+================================================================================
+
+#pragma once
+#include <string>
+#include <optional>
+#include <userver/components/component_base.hpp>
+#include <userver/storages/postgres/component.hpp>
+
+namespace user_service {
+
+enum class Role {
+    Client,
+    Seller
+};
+
+struct User {
+    int id;
+    std::string username;
+    std::string password;
+    std::string name;
+    Role role;
+};
+
+class UsersStorage final : public userver::components::ComponentBase {
+public:
+    static constexpr std::string_view kName = "users-storage";
+
+    UsersStorage(const userver::components::ComponentConfig& config,
+                const userver::components::ComponentContext& context);
+
+    std::optional<int> AddUser(const std::string& username,
+                               const std::string& password,
+                               const std::string& name,
+                               Role role);
+
+    std::optional<User> FindUser(const std::string& username,
+                                 const std::string& password) const;
+
+    std::optional<User> FindUserById(int id) const;
+
+    void SaveToken(const std::string& token, int user_id);
+
+    std::optional<int> FindUserByToken(const std::string& token) const;
+
+private:
+    userver::storages::postgres::ClusterPtr postgres_;
+};
+
+}  // namespace user_service
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\src\storage\users_storage.hpp
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\tests\conftest.py
+================================================================================
+
+[Файл похож на бинарный, пропущен]
+
+
+
+================================================================================
+ФАЙЛ: .\store\user-service\tests\test_auth.py
+================================================================================
+
+async def test_ping(service_client):
+    response = await service_client.get('/ping')
+    assert response.status == 200
+
+
+async def test_register(service_client):
+    response = await service_client.post(
+        '/users/register',
+        json={
+            'username': 'testuser',
+            'password': '123',
+            'name': 'Test User',
+            'role': 'client'
+        }
+    )
+    assert response.status == 201
+    data = response.json()
+    assert 'id' in data
+    assert data['username'] == 'testuser'
+
+
+async def test_register_duplicate(service_client):
+    await service_client.post(
+        '/users/register',
+        json={
+            'username': 'duplicate',
+            'password': '123',
+            'name': 'Test',
+            'role': 'client'
+        }
+    )
+    response = await service_client.post(
+        '/users/register',
+        json={
+            'username': 'duplicate',
+            'password': '123',
+            'name': 'Test',
+            'role': 'client'
+        }
+    )
+    assert response.status == 400
+
+
+async def test_login(service_client):
+    await service_client.post(
+        '/users/register',
+        json={
+            'username': 'loginuser',
+            'password': '123',
+            'name': 'Login User',
+            'role': 'client'
+        }
+    )
+    response = await service_client.post(
+        '/users/login',
+        json={'username': 'loginuser', 'password': '123'}
+    )
+    assert response.status == 200
+    data = response.json()
+    assert 'token' in data
+
+
+async def test_login_wrong_password(service_client):
+    response = await service_client.post(
+        '/users/login',
+        json={'username': 'loginuser', 'password': 'wrong'}
+    )
+    assert response.status == 401
+
+
+async def test_get_user_unauthorized(service_client):
+    response = await service_client.get('/users/1')
+    assert response.status == 401
+
+
+async def test_get_user(service_client):
+    await service_client.post(
+        '/users/register',
+        json={
+            'username': 'getuser',
+            'password': '123',
+            'name': 'Get User',
+            'role': 'client'
+        }
+    )
+    login = await service_client.post(
+        '/users/login',
+        json={'username': 'getuser', 'password': '123'}
+    )
+    token = login.json()['token']
+
+    response = await service_client.get(
+        '/users/1',
+        headers={'Authorization': f'Bearer {token}'}
+    )
+    assert response.status == 200
+    data = response.json()
+    assert 'username' in data
+
