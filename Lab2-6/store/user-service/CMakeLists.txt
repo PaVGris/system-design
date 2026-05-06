@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(user-service)
 
-find_package(userver REQUIRED COMPONENTS core chaotic postgresql)
+find_package(userver REQUIRED COMPONENTS core chaotic postgresql redis)
 
 add_executable(user-service
     src/main.cpp
@@ -24,6 +24,7 @@ target_link_libraries(user-service
     userver::core
     userver::chaotic
     userver::postgresql
+    userver::redis
     ${PROJECT_NAME}-chgen
 )
 

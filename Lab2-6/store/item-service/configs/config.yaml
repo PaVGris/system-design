@@ -28,6 +28,22 @@ components_manager:
         mongo-items:
             dbconnection: mongodb://mongo-db:27017/store_db
             dns_resolver: async
+        
+        items-cache:
+            groups:
+                - config_name: items-cache
+                  db: items-cache
+                  sharding_strategy: RedisStandalone 
+            subscribe_groups: []    
+            thread_pools:
+                redis_thread_pool_size: 4
+                sentinel_thread_pool_size: 1
+ 
+        default-secdist-provider:
+            config: configs/secdist.json
+            missing-ok: true
+            environment-secrets-key: SECDIST_CONFIG
+
         handler-get-items:
             path: /items
             method: GET

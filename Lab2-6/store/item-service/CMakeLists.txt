@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(item-service)
 
-find_package(userver REQUIRED COMPONENTS core chaotic mongo)
+find_package(userver REQUIRED COMPONENTS core chaotic mongo redis)
 
 add_executable(item-service
     src/main.cpp
@@ -24,6 +24,7 @@ target_link_libraries(item-service
     userver::core
     userver::chaotic
     userver::mongo
+    userver::redis
     ${PROJECT_NAME}-chgen
 )
 

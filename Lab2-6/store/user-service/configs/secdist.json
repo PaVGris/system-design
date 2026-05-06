@@ -1,0 +1,9 @@
+{
+    "redis_settings": {
+        "token-cache": {
+            "password": "",
+            "sentinels": [{"host": "redis", "port": 6379}],
+            "shards": [{"name": "token-cache"}]
+        }
+    }
+}

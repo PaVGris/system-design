@@ -27,8 +27,25 @@ components_manager:
         users-storage: {}
         postgres-db:
             dbconnection: postgresql://user:pass@db:5432/store_db
-            blocking_task_processor: fs-task-processor # важно: работа с БД идет в отдельном потоке
+            blocking_task_processor: fs-task-processor
             dns_resolver: async
+        
+        token-cache:
+            groups:
+                - config_name: token-cache
+                  db: token-cache
+                  sharding_strategy: RedisStandalone 
+            subscribe_groups: []
+            thread_pools:
+                redis_thread_pool_size: 4
+                sentinel_thread_pool_size: 1
+
+
+        default-secdist-provider:
+            config: configs/secdist.json 
+            missing-ok: true
+            environment-secrets-key: SECDIST_CONFIG
+
         handler-register:
             path: /users/register
             method: POST
