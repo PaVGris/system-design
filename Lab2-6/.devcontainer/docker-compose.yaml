@@ -44,7 +44,13 @@ services:
       - ../mongo:/docker-entrypoint-initdb.d:ro
     networks:           
       - store-network
-      
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    networks:
+      - store-network
 volumes:
   db-data:
 

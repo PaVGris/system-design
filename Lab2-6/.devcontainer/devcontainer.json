@@ -40,6 +40,6 @@
   "forwardPorts": [8080, 8081, 8082, 8083, 5432],
   
   "onCreateCommand": "sudo git config --global --add safe.directory /home/user/myservice",
-  "postCreateCommand": "pip install faker psycopg2-binary",
+  // "postCreateCommand": "pip install faker psycopg2-binary",
   "remoteUser": "user"
 }

@@ -19,6 +19,7 @@ REST API микросервисный магазин на C++ userver framework.
 |[ADR-001](./decisions/ADR-001.md)|architecture, gateway, auth|API Gateway как единая точка входа|
 |[ADR-002](./decisions/ADR-002.md)|auth, security|Session-based аутентификация|
 |[ADR-003](./decisions/ADR-003.md)| codegen, dto, chaotic|Chaotic для генерации DTO|
+|[ADR-004](./decisions/ADR-004.md)| caching, redis, performance | Redis как кеш для токенов и каталога товаров |
 
 ## Архитектура
 ![image](./content/container.png)
