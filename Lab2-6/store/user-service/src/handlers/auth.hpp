@@ -1,6 +1,7 @@
 #pragma once
 #include <userver/server/handlers/http_handler_base.hpp>
 #include <pg/users_pg.hpp>
+#include "rate_limiter.hpp"
 
 namespace user_service {
 
@@ -34,6 +35,7 @@ public:
 
 private:
     UsersStorage& storage_;
+    mutable user_service::RateLimiter rate_limiter_;
 };
 
 class GetUserHandler final : public userver::server::handlers::HttpHandlerBase {

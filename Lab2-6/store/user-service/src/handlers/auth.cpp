@@ -59,12 +59,21 @@ LoginHandler::LoginHandler(
     const userver::components::ComponentConfig& config,
     const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      storage_(context.FindComponent<UsersStorage>()) {}
+      storage_(context.FindComponent<UsersStorage>()),
+      rate_limiter_(storage_.GetRedisClient(), storage_.GetRedisCC())  {}
 
 std::string LoginHandler::HandleRequestThrow(
     const userver::server::http::HttpRequest& request,
     userver::server::request::RequestContext&
 ) const {
+
+    std::string client_ip = request.GetRemoteAddress().PrimaryAddressString();
+    
+    if (!rate_limiter_.IsAllowed(client_ip, 10, 60)) {
+        request.GetHttpResponse().SetStatus(userver::server::http::HttpStatus::kTooManyRequests);
+        return "{\"error\": \"Too many requests. Please try again later.\"}";
+    }
+
     auto body = userver::formats::json::FromString(request.RequestBody());
     auto req = body.As<LoginRequest>();
 

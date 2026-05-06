@@ -8,11 +8,17 @@
 #include <handlers/auth.hpp>
 #include <storage/users_storage.hpp>
 #include <userver/storages/postgres/component.hpp>
+#include <userver/storages/redis/component.hpp>
+#include <userver/storages/secdist/component.hpp>
+#include <userver/storages/secdist/provider_component.hpp>
 
 int main(int argc, char* argv[]) {
     auto component_list =
         userver::components::MinimalServerComponentList()
             .Append<userver::components::Postgres>("postgres-db")
+            .Append<userver::components::Redis>("token-cache")
+            .Append<userver::components::Secdist>()
+            .Append<userver::components::DefaultSecdistProvider>()
             .Append<user_service::UsersStorage>()
             .Append<userver::components::TestsuiteSupport>()
             .Append<user_service::RegisterHandler>()
