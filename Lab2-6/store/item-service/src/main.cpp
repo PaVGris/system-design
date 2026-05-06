@@ -8,11 +8,17 @@
 #include <handlers/items.hpp>
 #include <storage/items_storage.hpp>
 #include <userver/storages/mongo/component.hpp>
+#include <userver/storages/redis/component.hpp>
+#include <userver/storages/secdist/component.hpp>
+#include <userver/storages/secdist/provider_component.hpp>
 
 int main(int argc, char* argv[]) {
     auto component_list =
         userver::components::MinimalServerComponentList()
             .Append<userver::components::Mongo>("mongo-items")
+            .Append<userver::components::Redis>("items-cache")
+            .Append<userver::components::Secdist>()
+            .Append<userver::components::DefaultSecdistProvider>()
             .Append<userver::components::TestsuiteSupport>()
             .Append<item_service::ItemsStorage>()
             .Append<item_service::GetItemsHandler>()

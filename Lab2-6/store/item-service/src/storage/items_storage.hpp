@@ -6,6 +6,8 @@
 #include <userver/components/component_base.hpp>
 #include <userver/storages/mongo/component.hpp>
 #include <userver/storages/mongo/pool.hpp>
+#include <userver/storages/redis/client.hpp>
+#include <userver/storages/redis/component.hpp>
 
 namespace item_service {
 
@@ -43,6 +45,13 @@ public:
 
 private:
     userver::storages::mongo::PoolPtr pool_;
+    userver::storages::redis::ClientPtr redis_client_;
+    userver::storages::redis::CommandControl redis_cc_;
+
+    static constexpr int kItemListTtlSeconds = 300;
+    static constexpr std::string_view kItemListCacheKey = "items:all";
+
+    void InvalidateItemListCache() const;
 };
 
 }  // namespace item_service

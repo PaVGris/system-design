@@ -3,6 +3,8 @@
 #include <optional>
 #include <userver/components/component_base.hpp>
 #include <userver/storages/postgres/component.hpp>
+#include <userver/storages/redis/client.hpp>
+#include <userver/storages/redis/component.hpp>
 
 namespace user_service {
 
@@ -40,8 +42,15 @@ public:
 
     std::optional<int> FindUserByToken(const std::string& token) const;
 
+    userver::storages::redis::ClientPtr GetRedisClient() const;
+    userver::storages::redis::CommandControl GetRedisCC() const;
 private:
     userver::storages::postgres::ClusterPtr postgres_;
+    userver::storages::redis::ClientPtr redis_client_;
+    userver::storages::redis::CommandControl redis_cc_;
+
+    static constexpr int kTokenTtlSeconds = 3600;
+    static std::string MakeTokenKey(const std::string& token);
 };
 
 }  // namespace user_service
