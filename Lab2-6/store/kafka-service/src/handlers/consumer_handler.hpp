@@ -5,8 +5,6 @@
 
 namespace kafka_service {
 
-// Компонент-consumer: запускается при старте и читает события из топиков.
-// Подписан на: user-events, item-events, cart-events
 class ConsumerHandler final : public userver::components::ComponentBase {
 public:
     static constexpr std::string_view kName{"consumer-handler"};
@@ -18,8 +16,6 @@ public:
 
 private:
     void Consume(userver::kafka::MessageBatchView messages);
-
-    // Subscriptions must be the last field!
     userver::kafka::ConsumerScope consumer_;
 };
 

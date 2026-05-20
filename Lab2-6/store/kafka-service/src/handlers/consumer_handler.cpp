@@ -34,16 +34,12 @@ void ConsumerHandler::Consume(userver::kafka::MessageBatchView messages) {
                    << " key=" << key
                    << " payload=" << payload;
 
-        // Маршрутизация по топику
         if (topic == "user-events") {
             LOG_INFO() << "[consumer] Обработка UserEvent: " << payload;
-            // Например: обновление read-модели пользователей
         } else if (topic == "item-events") {
             LOG_INFO() << "[consumer] Обработка ItemEvent: " << payload;
-            // Например: инвалидация кеша каталога
         } else if (topic == "cart-events") {
             LOG_INFO() << "[consumer] Обработка CartEvent: " << payload;
-            // Например: обновление счётчика резервирования товаров
         }
     }
 }
