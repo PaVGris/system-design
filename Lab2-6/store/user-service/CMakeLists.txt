@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(user-service)
 
-find_package(userver REQUIRED COMPONENTS core chaotic postgresql redis)
+find_package(userver REQUIRED COMPONENTS core chaotic postgresql redis kafka)
 
 add_executable(user-service
     src/main.cpp
@@ -25,6 +25,7 @@ target_link_libraries(user-service
     userver::chaotic
     userver::postgresql
     userver::redis
+    userver::kafka
     ${PROJECT_NAME}-chgen
 )
 

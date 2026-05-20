@@ -4,6 +4,9 @@ components_manager:
             worker_threads: 4
         fs-task-processor:
             worker_threads: 2
+        producer-task-processor:
+            thread_name: producer
+            worker_threads: 2
     default_task_processor: main-task-processor
     components:
         server:
@@ -40,6 +43,11 @@ components_manager:
                 redis_thread_pool_size: 4
                 sentinel_thread_pool_size: 1
 
+        kafka-producer-users:
+            delivery_timeout: 10s
+            queue_buffering_max: 100ms
+            enable_idempotence: true
+            security_protocol: PLAINTEXT
 
         default-secdist-provider:
             config: configs/secdist.json 

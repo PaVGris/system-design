@@ -11,6 +11,7 @@
 #include <userver/storages/redis/component.hpp>
 #include <userver/storages/secdist/component.hpp>
 #include <userver/storages/secdist/provider_component.hpp>
+#include <userver/kafka/producer_component.hpp>
 
 int main(int argc, char* argv[]) {
     auto component_list =
@@ -20,6 +21,7 @@ int main(int argc, char* argv[]) {
             .Append<userver::components::Secdist>()
             .Append<userver::components::DefaultSecdistProvider>()
             .Append<userver::components::TestsuiteSupport>()
+            .Append<userver::kafka::ProducerComponent>("kafka-producer-items")
             .Append<item_service::ItemsStorage>()
             .Append<item_service::GetItemsHandler>()
             .Append<item_service::GetItemHandler>()

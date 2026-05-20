@@ -4,6 +4,8 @@
 #include <userver/yaml_config/schema.hpp>
 #include <userver/components/component_base.hpp>
 #include <storage/cart_storage.hpp>
+#include <userver/kafka/producer.hpp>
+
 
 namespace cart_service {
 
@@ -41,6 +43,7 @@ private:
     cart_service::CartStorage& storage_;
     userver::clients::http::Client& http_client_;
     std::string item_service_url_;
+    const userver::kafka::Producer& producer_;
 };
 
 class RemoveFromCartHandler final : public userver::server::handlers::HttpHandlerBase {

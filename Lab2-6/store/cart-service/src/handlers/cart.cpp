@@ -7,6 +7,8 @@
 #include <userver/clients/http/component.hpp>
 #include <schemas/cart.hpp>
 #include <userver/yaml_config/merge_schemas.hpp>
+#include <userver/logging/log.hpp>  
+#include <userver/kafka/producer_component.hpp> 
 
 namespace cart_service {
 
@@ -52,7 +54,10 @@ AddToCartHandler::AddToCartHandler(
     : HttpHandlerBase(config, context),
       storage_(context.FindComponent<cart_service::CartStorage>()),
       http_client_(context.FindComponent<userver::components::HttpClient>().GetHttpClient()),
-      item_service_url_(config["item-service-url"].As<std::string>()) {}
+      item_service_url_(config["item-service-url"].As<std::string>()),
+      producer_(context.FindComponent<userver::kafka::ProducerComponent>(
+                    "kafka-producer-cart")
+                    .GetProducer()) {}
 
 std::string AddToCartHandler::HandleRequestThrow(
     const userver::server::http::HttpRequest& request,
@@ -83,6 +88,24 @@ std::string AddToCartHandler::HandleRequestThrow(
     }
 
     storage_.AddItem(user_id, req.item_id, req.quantity);
+
+    try {
+        userver::formats::json::ValueBuilder event;
+        event["event_type"] = "ItemAddedToCart";
+        event["user_id"]    = user_id;
+        event["item_id"]    = req.item_id;
+        event["quantity"]   = req.quantity;
+
+        producer_.Send(
+            "cart-events",
+            std::to_string(user_id),
+            userver::formats::json::ToString(event.ExtractValue())
+        );
+        LOG_INFO() << "Published ItemAddedToCart event for user_id=" << user_id
+                   << " item_id=" << req.item_id;
+    } catch (const userver::kafka::SendException& ex) {
+        LOG_ERROR() << "Failed to publish ItemAddedToCart event: " << ex.what();
+    }
 
     request.GetHttpResponse().SetContentType("application/json");
     return R"({"status": "ok"})";

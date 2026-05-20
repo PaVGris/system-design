@@ -33,6 +33,15 @@ REST API микросервисный магазин на C++ userver framework.
 | item-service | 8082 | Каталог товаров |
 | cart-service | 8083 | Корзина пользователя |
 
+## Event-Driven архитектура (Apache Kafka)
+
+В рамках лабораторной реализована event-driven архитектура на базе Apache Kafka:
+
+- Кластер из двух брокеров в режиме KRaft (без Zookeeper).
+- Три producer'а в существующих сервисах: публикуют события при создании пользователя, товара и добавлении в корзину.
+- Отдельный `kafka-service` с consumer'ом, подписанным на все три топика.
+- Kafka UI доступен на `http://localhost:8888`.
+
 ## Схема базы данных MongoDB
 Схема и правила валидации находятся в [`mongo/01_validation.js`](/mongo/01_validation.js), тестовые данные — в [`mongo/02_data.js`](/mongo/02_data.js). Данные загружаются при запуске Dev Container.
 
@@ -183,6 +192,9 @@ store/                    # Сам сервис
 │   │   └── storage/      # in-memory хранилище
 │   ├── schemas/          # Схемы
 │   └── tests/            # Функциональные тесты
+├── kafka-service/          # Маршрутизация и аутентификация
+│   ├── configs/          # Конфигурация
+│   ├── src/handlers/     # HTTP хендлеры 
 ├── user-service/         # Пользователи и токены
 │   ├── configs/          # Конфигурация
 │   ├── src/    

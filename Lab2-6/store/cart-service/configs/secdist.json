@@ -1,0 +1,9 @@
+{
+    "kafka_settings": {
+        "kafka-producer-cart": {
+            "brokers": "kafka1:19092,kafka2:19092",
+            "username": "",
+            "password": ""
+        }
+    }
+}

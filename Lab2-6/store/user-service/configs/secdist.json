@@ -4,6 +4,18 @@
             "password": "",
             "sentinels": [{"host": "redis", "port": 6379}],
             "shards": [{"name": "token-cache"}]
+        },
+        "items-cache": {
+            "password": "",
+            "sentinels": [{"host": "redis", "port": 6379}],
+            "shards": [{"name": "items-cache"}]
+        }
+    },
+    "kafka_settings": {
+        "kafka-producer-users": {
+            "brokers": "kafka1:19092,kafka2:19092",
+            "username": "",
+            "password": ""
         }
     }
 }

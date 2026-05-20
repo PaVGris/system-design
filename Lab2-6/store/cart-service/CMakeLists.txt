@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(cart-service)
 
-find_package(userver REQUIRED COMPONENTS core chaotic mongo)
+find_package(userver REQUIRED COMPONENTS core chaotic mongo kafka)
 
 add_executable(cart-service
     src/main.cpp
@@ -24,6 +24,7 @@ target_link_libraries(cart-service
     userver::core
     userver::chaotic
     userver::mongo
+    userver::kafka
     ${PROJECT_NAME}-chgen
 )
 

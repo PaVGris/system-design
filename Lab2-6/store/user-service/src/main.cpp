@@ -11,6 +11,7 @@
 #include <userver/storages/redis/component.hpp>
 #include <userver/storages/secdist/component.hpp>
 #include <userver/storages/secdist/provider_component.hpp>
+#include <userver/kafka/producer_component.hpp> 
 
 int main(int argc, char* argv[]) {
     auto component_list =
@@ -19,6 +20,7 @@ int main(int argc, char* argv[]) {
             .Append<userver::components::Redis>("token-cache")
             .Append<userver::components::Secdist>()
             .Append<userver::components::DefaultSecdistProvider>()
+            .Append<userver::kafka::ProducerComponent>("kafka-producer-users")
             .Append<user_service::UsersStorage>()
             .Append<userver::components::TestsuiteSupport>()
             .Append<user_service::RegisterHandler>()

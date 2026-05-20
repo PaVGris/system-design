@@ -3,7 +3,6 @@ services:
     image: ghcr.io/userver-framework/ubuntu-22.04-userver-pg-dev:v2.14
     volumes:
       - ..:/home/user/myservice:cached
-    # УБРАТЬ network_mode: service:db
     cap_add:
       - SYS_PTRACE
     security_opt:
@@ -12,11 +11,15 @@ services:
     depends_on:
       - db
       - mongo-db
+      - redis
+      - kafka1
+      - kafka2
     environment:
       - DB_HOST=db
       - DB_NAME=store_db
       - DB_USER=user
       - DB_PASS=pass
+      - KAFKA_BOOTSTRAP_SERVERS=kafka1:19092,kafka2:19092
     networks:
       - store-network
 
@@ -33,17 +36,20 @@ services:
       - ../postgresql/schemas:/docker-entrypoint-initdb.d:ro
     networks:
       - store-network
+
   mongo-db:
-    image: mongo:5.0
+    image: mongo:7
     container_name: mongo-store
     ports:
       - "27017:27017"
     environment:
       - MONGO_INITDB_DATABASE=store_db
     volumes:
+      - mongo-data:/data/db
       - ../mongo:/docker-entrypoint-initdb.d:ro
-    networks:           
+    networks:
       - store-network
+
   redis:
     image: redis:7-alpine
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
@@ -51,8 +57,67 @@ services:
       - "6379:6379"
     networks:
       - store-network
+
+  kafka1:
+    image: apache/kafka:3.7.0
+    container_name: kafka1
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka1:9093,2@kafka2:9093"
+      KAFKA_LISTENERS: "INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka1:19092,EXTERNAL://localhost:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CLUSTER_ID: "dh6khitPSDGZSBOjNeTC_g"
+    volumes:
+      - kafka_volume1:/var/lib/kafka/data
+    networks:
+      - store-network
+
+  kafka2:
+    image: apache/kafka:3.7.0
+    container_name: kafka2
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka1:9093,2@kafka2:9093"
+      KAFKA_LISTENERS: "INTERNAL://:19092,EXTERNAL://:9094,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka2:19092,EXTERNAL://localhost:9094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CLUSTER_ID: "dh6khitPSDGZSBOjNeTC_g"
+    volumes:
+      - kafka_volume2:/var/lib/kafka/data
+    networks:
+      - store-network
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    ports:
+      - "8888:8080"
+    environment:
+      KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: "kafka1:19092,kafka2:19092"
+      KAFKA_CLUSTERS_0_NAME: "kraft"
+    depends_on:
+      - kafka1
+      - kafka2
+    networks:
+      - store-network
+
 volumes:
   db-data:
+  mongo-data:
+  kafka_volume1:
+  kafka_volume2:
 
 networks:
   store-network:

@@ -5,5 +5,12 @@
             "sentinels": [{"host": "redis", "port": 6379}],
             "shards": [{"name": "items-cache"}]
         }
+    },
+        "kafka_settings": {
+        "kafka-producer-items": {
+            "brokers": "kafka1:19092,kafka2:19092",
+            "username": "",
+            "password": ""
+        }
     }
 }

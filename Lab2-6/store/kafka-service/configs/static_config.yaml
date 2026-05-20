@@ -4,69 +4,69 @@ components_manager:
             worker_threads: 4
         fs-task-processor:
             worker_threads: 2
+        consumer-task-processor:
+            thread_name: consumer
+            worker_threads: 1
+        consumer-blocking-task-processor:
+            thread_name: consumer-blocking
+            worker_threads: 1
         producer-task-processor:
             thread_name: producer
-            worker_threads: 2
+            worker_threads: 4
     default_task_processor: main-task-processor
+
     components:
         server:
             listener:
-                port: 8083
+                port: 8085
                 task_processor: main-task-processor
+
         logging:
             fs-task-processor: fs-task-processor
             loggers:
                 default:
                     file_path: '@stdout'
                     level: info
+
         dynamic-config:
             defaults: {}
+
         testsuite-support: {}
+
         http-client:
         http-client-core:
             fs-task-processor: fs-task-processor
+
         dns-client:
             fs-task-processor: fs-task-processor
-        cart-storage: {}
-        mongo-cart:
-            dbconnection: mongodb://mongo-db:27017/store_db
-            dns_resolver: async
 
-        kafka-producer-cart:
-            delivery_timeout: 10s
-            queue_buffering_max: 100ms
-            enable_idempotence: true
+        kafka-consumer:
+            group_id: store-consumer-group
+            topics:
+                - item-events
+                - cart-events
+                - user-events
+            auto_offset_reset: smallest
+            max_batch_size: 10
+            poll_timeout: 500ms
             security_protocol: PLAINTEXT
 
+        consumer-handler:
+        
         default-secdist-provider:
             config: configs/secdist.json
             missing-ok: true
             environment-secrets-key: SECDIST_CONFIG
 
-        handler-get-cart:
-            path: /cart
-            method: GET
-            task_processor: main-task-processor
-        handler-add-to-cart:
-            path: /cart
-            method: POST
-            task_processor: main-task-processor
-            # item-service-url: $item-service-url
-            item-service-url: "http://localhost:8082"
-        handler-remove-from-cart:
-            path: /cart/{item_id}
-            method: DELETE
-            task_processor: main-task-processor
         handler-ping:
             path: /ping
             method: GET
             task_processor: main-task-processor
             throttling_enabled: false
+
         tests-control:
             load-enabled: $testsuite-enabled
             path: /tests/{action}
             method: POST
             task_processor: main-task-processor
             throttling_enabled: false
-
-config_vars: configs/config_vars.yaml

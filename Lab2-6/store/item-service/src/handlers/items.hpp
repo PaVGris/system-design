@@ -1,5 +1,6 @@
 #pragma once
 #include <userver/server/handlers/http_handler_base.hpp>
+#include <userver/kafka/producer.hpp> 
 #include <storage/items_storage.hpp>
 
 namespace item_service {
@@ -50,6 +51,7 @@ public:
 
 private:
     ItemsStorage& storage_;
+    const userver::kafka::Producer& producer_; 
 };
 
 class UpdateItemHandler final : public userver::server::handlers::HttpHandlerBase {

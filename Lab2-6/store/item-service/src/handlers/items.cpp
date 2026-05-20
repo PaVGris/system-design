@@ -3,6 +3,8 @@
 #include <userver/formats/json/value_builder.hpp>
 #include <userver/server/handlers/exceptions.hpp>
 #include <userver/components/component_context.hpp>
+#include <userver/kafka/producer_component.hpp>
+#include <userver/logging/log.hpp>  
 #include <schemas/item.hpp>
 
 namespace item_service {
@@ -76,7 +78,10 @@ CreateItemHandler::CreateItemHandler(
     const userver::components::ComponentConfig& config,
     const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      storage_(context.FindComponent<ItemsStorage>()) {}
+      storage_(context.FindComponent<ItemsStorage>()),      
+      producer_(context.FindComponent<userver::kafka::ProducerComponent>(
+                    "kafka-producer-items")
+                    .GetProducer()) {}
 
 std::string CreateItemHandler::HandleRequestThrow(
     const userver::server::http::HttpRequest& request,
@@ -91,6 +96,24 @@ std::string CreateItemHandler::HandleRequestThrow(
     userver::formats::json::ValueBuilder result;
     result["id"] = id;
 
+    try {
+        userver::formats::json::ValueBuilder event;
+        event["event_type"] = "ItemCreated";
+        event["item_id"]    = id;
+        event["name"]       = req.name;
+        event["price"]      = req.price;
+        event["quantity"]   = req.quantity;
+
+        producer_.Send(
+            "item-events",             
+            id,                          
+            userver::formats::json::ToString(event.ExtractValue())
+        );
+        LOG_INFO() << "Published ItemCreated event for item_id=" << id;
+    } catch (const userver::kafka::SendException& ex) {
+        LOG_ERROR() << "Failed to publish ItemCreated event: " << ex.what();
+    }
+    
     request.GetHttpResponse().SetStatus(
         userver::server::http::HttpStatus::kCreated);
     request.GetHttpResponse().SetContentType("application/json");

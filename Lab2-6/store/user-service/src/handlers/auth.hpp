@@ -1,5 +1,6 @@
 #pragma once
 #include <userver/server/handlers/http_handler_base.hpp>
+#include <userver/kafka/producer.hpp> 
 #include <pg/users_pg.hpp>
 #include "rate_limiter.hpp"
 
@@ -19,6 +20,7 @@ public:
 
 private:
     UsersStorage& storage_;
+    const userver::kafka::Producer& producer_;
 };
 
 class LoginHandler final : public userver::server::handlers::HttpHandlerBase {

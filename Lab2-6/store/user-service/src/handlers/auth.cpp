@@ -3,6 +3,8 @@
 #include <userver/formats/json/value_builder.hpp>
 #include <userver/server/handlers/exceptions.hpp>
 #include <userver/components/component_context.hpp>
+#include <userver/kafka/producer_component.hpp>
+#include <userver/logging/log.hpp>
 
 #include <schemas/user.hpp>
 #include <random>
@@ -28,7 +30,10 @@ RegisterHandler::RegisterHandler(
     const userver::components::ComponentConfig& config,
     const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      storage_(context.FindComponent<UsersStorage>()) {}
+      storage_(context.FindComponent<UsersStorage>()),
+      producer_(context.FindComponent<userver::kafka::ProducerComponent>(
+                    "kafka-producer-users")
+                    .GetProducer()) {}
 
 std::string RegisterHandler::HandleRequestThrow(
     const userver::server::http::HttpRequest& request,
@@ -45,6 +50,24 @@ std::string RegisterHandler::HandleRequestThrow(
             userver::server::handlers::ExternalBody{"Username already taken"});
     }
 
+    try {
+        userver::formats::json::ValueBuilder event;
+        event["event_type"] = "UserRegistered";
+        event["user_id"]    = *id;
+        event["username"]   = req.username;
+        event["name"]       = req.name;
+        event["role"]       = req.role;
+
+        producer_.Send(
+            "user-events",
+            std::to_string(*id),   // key — user_id
+            userver::formats::json::ToString(event.ExtractValue())
+        );
+        LOG_INFO() << "Published UserRegistered event for user_id=" << *id
+                   << " username=" << req.username;
+    } catch (const userver::kafka::SendException& ex) {
+        LOG_ERROR() << "Failed to publish UserRegistered event: " << ex.what();
+    }
     userver::formats::json::ValueBuilder result;
     result["id"] = *id;
     result["username"] = req.username;

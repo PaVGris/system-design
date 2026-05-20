@@ -1,0 +1,9 @@
+{
+    "kafka_settings": {
+        "kafka-consumer": {
+            "brokers": "kafka1:19092,kafka2:19092",
+            "username": "",
+            "password": ""
+        }
+    }
+}
